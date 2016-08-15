@@ -13,3 +13,4 @@ erl_crash.dump
 rebar.lock
 /priv
 .rebar3
+*.so
