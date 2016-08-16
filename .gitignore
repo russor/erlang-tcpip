@@ -2,6 +2,7 @@
 deps
 *.o
 *.beam
+*.app
 *.plt
 erl_crash.dump
 .concrete/DEV_MODE
@@ -11,3 +12,4 @@ erl_crash.dump
 /_build
 rebar.lock
 /priv
+.rebar3
