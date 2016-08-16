@@ -14,3 +14,6 @@ rebar.lock
 /priv
 .rebar3
 *.so
+/_build
+rebar.lock
+/priv
