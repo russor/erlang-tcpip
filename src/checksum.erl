@@ -32,7 +32,7 @@ start() ->
     spawn(checksum, init, []).
 
 init() ->
-    erl_ddll:load_driver("c_src", "checksum"),
+    erl_ddll:load_driver(code:priv_dir(etcpip), "checksum"),
     Port = open_port({spawn, checksum}, [binary]),
     register(checksum, self()),
     loop(Port).

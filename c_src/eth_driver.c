@@ -23,8 +23,6 @@
 #include <netinet/in.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <net/ethernet.h>
-#include <linux/if_packet.h>
 #include <sys/select.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -33,18 +31,22 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <erl_driver.h>
+#include <pcap.h>
 
 #define BUFSIZE 65536
+#define POLL_TIMEOUT 1000L
 
 struct eth_data {
   ErlDrvPort port;
-  int socket;
+  int selectable_socket;
+  pcap_t *pcap;
   char *iface;
 };
 
 static ErlDrvData eth_start(ErlDrvPort port, char *buff);
 static void eth_stop(ErlDrvData drv_data);
 static void eth_input(ErlDrvData drv_data, ErlDrvEvent event);
+static void eth_timeout(ErlDrvData drv_data);
 static int eth_control(ErlDrvData drv_data, unsigned int command,
 		       char *buf, int len, char **rbuf, int rlen);
 static void eth_outputv(ErlDrvData drv_data, ErlIOVec *ev);
@@ -64,7 +66,7 @@ static ErlDrvEntry eth_driver_entry = {
   NULL,                  /* finish, called when unloaded */
   NULL,                  /* void * that is not used (BC) */
   eth_control,           /* control, port_control callback */
-  NULL,                  /* timeout, called on timeouts */
+  eth_timeout,           /* timeout, called on timeouts */
   eth_outputv,           /* outputv, vector output interface */
   NULL,					 /* Ready Async */
   NULL, 				 /* flush */
@@ -80,86 +82,70 @@ static ErlDrvEntry eth_driver_entry = {
   NULL
 };
 
-
-/*
-  Reverses integer endianess
-*/
-int reverse_endian(int size)
+static void attempt_to_read(ErlDrvData drv_data)
 {
-  union {
-    int reversed;
-    char byte[4];
-  } rev;
-  
-  rev.byte[0] = (size >> 24) & 0xff;
-  rev.byte[1] = (size >> 16) & 0xff;
-  rev.byte[2] = (size >> 8)  & 0xff;
-  rev.byte[3] = size & 0xff;
-  
-  return rev.reversed;
+	struct eth_data *drv = (struct eth_data *) drv_data;
+	ErlDrvBinary *buffer;
+	const u_char *pkt;
+	struct pcap_pkthdr h;
+
+	if (drv_data == NULL) return;
+	if (drv == NULL) return;
+
+	memset(&h, 0, sizeof(h));
+
+	buffer = driver_alloc_binary(BUFSIZE);
+	pkt = pcap_next(drv->pcap, &h);
+	while(buffer != NULL && pkt != NULL) {
+		memcpy(buffer->orig_bytes, pkt, h.caplen);
+		driver_output_binary(drv->port, NULL, 0, buffer, 0, h.caplen);
+		driver_free_binary(buffer);
+
+		buffer = driver_alloc_binary(BUFSIZE);
+		pkt = pcap_next(drv->pcap, &h);
+	}
+
+	// In the last iteration of the while an alloc is made, but
+	//no driver_free is done, so it must be done here
+	if (buffer) driver_free_binary(buffer);
+	// Reset our timer..
+	driver_set_timer(drv->port, POLL_TIMEOUT);
 }
 
 
 /*
- Opens a raw ethernet socket
-*/
-
-int open_raw_socket()
+ * Open up the PCAP interface
+ */
+static pcap_t *
+open_pcap(const char *if_name)
 {
-  int sock;
-  
-  if((sock = socket(PF_PACKET, SOCK_RAW, htons(ETH_P_ALL))) < 0) {
-    fprintf(stderr, "Error opening socket:%s\n",strerror(errno));
-    exit(0);
-  }
-  
-  if(fcntl(sock, F_SETFL, O_NONBLOCK) < 0) {
-    fprintf(stderr, "Error setting non blocking operation\n");
-    exit(0);
-  }
+	char	pcap_errbuf[PCAP_ERRBUF_SIZE];
+	pcap_t	*pcap;
 
-  return sock;
+	pcap_errbuf[0]='\0';
+	pcap = pcap_open_live(if_name,1500,1,0,pcap_errbuf);
+	if (pcap_errbuf[0]!='\0') {
+	    fprintf(stderr, "%s", pcap_errbuf);
+	}
+	if (!pcap) {
+	    exit(1);
+	}
+
+	pcap_set_promisc(pcap, 1);
+	return pcap;
 }
 
 /*
- Get the kernel index for a network interface
-*/
-
-int get_ifindex(int socket, char *ifname)
+ * Get the socket from the PCAP library
+ */
+static int
+get_pcap_socket(pcap_t *pcap)
 {
-  struct ifreq ifr;
-  
-  strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
-  if(ioctl(socket, SIOCGIFINDEX, &ifr) < 0) {
-    fprintf(stderr, "Error getting interface index for %s:%s\n",ifname, strerror(errno));
-    exit(0);
-  }
-  
-  return ifr.ifr_ifindex;
-}
+	char	pcap_errbuf[PCAP_ERRBUF_SIZE];
 
-/*
- Bind the socket to a network interface so that it doesn't receive packets
- from any other.
-*/
-
-int bind_to_interface(int socket, char *ifname)
-{
-  int ifindex;
-  struct sockaddr_ll options;
-  
-  ifindex = get_ifindex(socket, ifname);
-  
-  options.sll_family   = AF_PACKET;
-  options.sll_protocol = htons(ETH_P_ALL);
-  options.sll_ifindex  = ifindex;
-  
-  if(bind(socket, (struct sockaddr *)&options, sizeof(struct sockaddr_ll))<0) {
-    fprintf(stderr, "Error binding socket:%s\n",strerror(errno));
-    exit(0);
-  }
-  
-  return 0;
+	pcap_setnonblock(pcap, 1, pcap_errbuf);
+	pcap_set_timeout(pcap, 10); // 10ms !
+	return pcap_get_selectable_fd(pcap);
 }
 
 /*
@@ -167,91 +153,36 @@ int bind_to_interface(int socket, char *ifname)
 */
 static void eth_input(ErlDrvData drv_data, ErlDrvEvent event)
 {
-  int size; 
-  ErlDrvBinary *buffer;
-  struct eth_data *drv= (struct eth_data *) drv_data;
-  
-  while((buffer=driver_alloc_binary(BUFSIZE),
-         size = recv(drv->socket, buffer->orig_bytes, BUFSIZE, 0)) > 0) {
-    driver_output_binary(drv->port, NULL, 0, buffer, 0, size);
-    driver_free_binary(buffer);
-  }
-
-  // In the last iteration of the while an alloc is made, but
-  //no driver_free is done, so it must be done here
-  driver_free_binary(buffer);
-
-  if(errno != EAGAIN) {
-    fprintf(stderr, "Error reading packet:%s\n", strerror(errno));
-    exit(0);
-  }
+	attempt_to_read(drv_data);
 }
 
-static void eth_input2(ErlDrvData drv_data, ErlDrvEvent event)
+static void eth_timeout(ErlDrvData drv_data)
 {
-  int size; 
-  char buffer[BUFSIZE];
-  struct eth_data *drv= (struct eth_data *) drv_data;
-  
-  while((size = recv(drv->socket, buffer, BUFSIZE, 0)) > 0) {
-    driver_output(drv->port, buffer, size);
-  }
-  if(errno != EAGAIN) {
-    fprintf(stderr, "Error reading packet:%s\n", strerror(errno));
-    exit(0);
-  }
+	attempt_to_read(drv_data);
 }
-
 
 static void eth_outputv(ErlDrvData drv_data, ErlIOVec *ev)
 {
-  struct eth_data *drv = (struct eth_data *) drv_data;
+	int i;
+	long pkt_size = 0, offset = 0;
+	char *pkt;
+	struct eth_data *drv = (struct eth_data *) drv_data;
 
-  writev(drv->socket, (struct iovec *) ev->iov, ev->vsize);
+	for(i = 0; i < ev->vsize; i++) {
+		pkt_size += ev->iov[i].iov_len;
+	}
+
+	pkt = malloc(pkt_size);
+	if (pkt != NULL) {
+		for (i = 0; i < ev->vsize; i++) {
+			memcpy(pkt + offset, ev->iov[i].iov_base, ev->iov[i].iov_len);
+			offset += ev->iov[i].iov_len;
+		}
+		pcap_inject(drv->pcap, pkt, pkt_size);
+	}
+	free(pkt);
 }
 
-int enter_promiscuous_mode(int socket, char *ifname)
-{
-  struct ifreq ifr;
-  
-  strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
-  if(ioctl(socket, SIOCGIFFLAGS, &ifr) < 0) {
-    fprintf(stderr, "Error getting interface flags:%s\n",strerror(errno));
-    exit(0);
-  }
-
-  ifr.ifr_flags |= IFF_PROMISC;
-  
-  if(ioctl(socket, SIOCSIFFLAGS, &ifr) < 0) {
-    fprintf(stderr, "Error setting interface flags:%s\n",strerror(errno));
-    exit(0);
-  }
-
-  return 0;
-}
-
-/*
-  Exits promiscuous mode in the interface
-*/
-int exit_promiscuous_mode(int socket, char *ifname)
-{
-  struct ifreq ifr;
-  
-  strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
-  if(ioctl(socket, SIOCGIFFLAGS, &ifr) < 0) {
-    fprintf(stderr, "Error exitting promiscuos mode:%s\n",strerror(errno));
-    exit(0);
-  }
-  
-  ifr.ifr_flags ^= (ifr.ifr_flags & IFF_PROMISC);
-  
-  if(ioctl(socket, SIOCSIFFLAGS, &ifr) < 0) {
-    fprintf(stderr, "Error exitting promiscuous mode:%s\n",strerror(errno));
-    exit(0);
-  }
-
-  return 0;
-}
 
 DRIVER_INIT(eth_driver)
 {
@@ -262,7 +193,7 @@ static ErlDrvData eth_start(ErlDrvPort port, char *buff)
 {
   struct eth_data *drv = malloc(sizeof(struct eth_data));
   drv->port = port;
-  drv->socket = -1;
+  drv->pcap = NULL;
   drv->iface = NULL;
   return (ErlDrvData) drv;
 }
@@ -271,86 +202,81 @@ static void eth_stop(ErlDrvData drv_data)
 {
   struct eth_data *drv = (struct eth_data *) drv_data;
 
-  driver_select(drv->port, (ErlDrvEvent) drv->socket, DO_READ, 0);
-  exit_promiscuous_mode(drv->socket, drv->iface);
+  driver_select(drv->port, (ErlDrvEvent) drv->selectable_socket, DO_READ, 0);
   free(drv->iface);
-  close(drv->socket);
+  pcap_close(drv->pcap);
   free((ErlDrvPort *) drv_data);
 }
 
-static struct tpacket_stats get_packet_stats(int sock)
+static int get_iface_mtu(pcap_t *pcap, char *iface)
 {
-    struct tpacket_stats st;
-    unsigned size=sizeof(struct tpacket_stats);
+	int fd;
+	struct ifreq ifr;
 
-    if(getsockopt(sock, SOL_PACKET, PACKET_STATISTICS, &st, &size)) {
-	st.tp_packets=-1;
-        st.tp_drops=-1;
-    }
+	if (!iface)
+	    return 1500;
 
-    return st;
-}
+	fd = get_pcap_socket(pcap);
+	memset(&ifr, 0, sizeof(ifr));
+	strncpy(ifr.ifr_name, iface, sizeof(ifr.ifr_name));
 
-static int get_iface_mtu(int sock, char *iface) 
-{
-    struct ifreq ifr;
-  
-    strncpy(ifr.ifr_name, iface, IFNAMSIZ);
-    if(ioctl(sock, SIOCGIFMTU, &ifr) < 0) {
-      fprintf(stderr, "Error getting interface mtu:%s\n",strerror(errno));
-      exit(0);
-    }
+	if (ioctl(fd, SIOCGIFMTU, &ifr) == -1) {
+	    perror("Error opening:");
+	    exit(EXIT_FAILURE);
+	}
 
-    return ifr.ifr_mtu;
+	return ifr.ifr_mtu;
 }
 
 static int eth_control(ErlDrvData drv_data, unsigned int command,
-		       char *buf, int len, char **rbuf, int rlen)
+		char *buf, int len, char **rbuf, int rlen)
 {
-    struct eth_data *drv = (struct eth_data *) drv_data;
-    int sock;
-    char *ifname;
-    struct tpacket_stats st;
+	struct eth_data *drv = (struct eth_data *) drv_data;
+	int selectable_sock;
+	char *ifname;
+	pcap_t *pcap;
 
-    switch(command) {
-    case 0: // specify the interface to bind
-	ifname = malloc(len+1);
+	switch(command) {
+	case 0: // specify the interface to bind
+		ifname = malloc(len+1);
 
-	strncpy(ifname, buf, len);
-	ifname[len] = '\0';
+		strncpy(ifname, buf, len);
+		ifname[len] = '\0';
 
-	sock = open_raw_socket();
-	bind_to_interface(sock, ifname);
-	enter_promiscuous_mode(sock, ifname);
+		pcap = open_pcap(ifname);
+		selectable_sock = get_pcap_socket(pcap);
+		driver_select(drv->port, (ErlDrvEvent) selectable_sock, DO_READ, 1);
+		drv->pcap = pcap;
+		drv->selectable_socket = selectable_sock;
+		drv->iface = ifname;
 
-	driver_select(drv->port, (ErlDrvEvent) sock, DO_READ, 1);
-	drv->socket = sock;
-	drv->iface = ifname;
+		driver_set_timer(drv->port, POLL_TIMEOUT);
 
-	return 0;
-	break;
-    case 1: // get packets stats
-	st = get_packet_stats(drv->socket);
-	if(rlen < 2*(sizeof(int))) {
-            *rbuf=driver_realloc(*rbuf, sizeof(int));
+		return 0;
+		break;
+	case 1: // get packets stats
+		// st = get_packet_stats(drv->socket);
+		if(rlen < 2*(sizeof(int))) {
+			*rbuf=driver_realloc(*rbuf, sizeof(int));
+		}
+		/* TODO */
+		((int *) (*rbuf))[0] = 0xDEAD;
+		((int *) (*rbuf))[1] = 0xBEEF;
+
+		return 2*sizeof(int);
+		break;
+	case 2: { // get iface MTU
+		int mtu;
+		mtu = get_iface_mtu(drv->pcap, drv->iface);
+
+		if(rlen < (sizeof(int))) {
+			*rbuf = driver_realloc(*rbuf, sizeof(int));
+		}
+		((int *) (*rbuf))[0] = mtu;
+
+		return sizeof(int);
+		break;
 	}
-	((int *) (*rbuf))[0] = st.tp_packets;
-        ((int *) (*rbuf))[1] = st.tp_drops;
-
-        return 2*sizeof(int);
-        break;
-    case 2: { // get iface MTU
-        int mtu;
-        mtu = get_iface_mtu(drv->socket, drv->iface);
-	
-	if(rlen < (sizeof(int))) {
-	  *rbuf = driver_realloc(*rbuf, sizeof(int));
 	}
-	((int *) (*rbuf))[0] = mtu;
-	
-	return sizeof(int);
-	break;
-	}
-    }
-    return -1;
+	return -1;
 }

@@ -30,7 +30,7 @@ start(Iface) ->
     spawn_link(eth_port, init, [Iface]).
 
 init(Iface) ->
-    erl_ddll:load_driver("c_src", "eth_driver"),
+    erl_ddll:load_driver(code:priv_dir(etcpip), "eth_driver"),
     Port = open_port({spawn_driver, eth_driver},[binary]),
     port_control(Port, 0, Iface),
     spawn_link(eth_port, init_writer, [Port, self()]),
