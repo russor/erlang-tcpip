@@ -20,7 +20,7 @@ ifeq ($(UNAME_SYS), Darwin)
 	CC ?= cc
 	CFLAGS ?= -O3 -arch x86_64 -finline-functions -Wall -Wmissing-prototypes
 	CXXFLAGS ?= -O3 -arch x86_64 -finline-functions -Wall
-	LDFLAGS ?= -arch x86_64 -flat_namespace -undefined suppress /usr/local/lib/libpcap.a
+	LDFLAGS ?= -arch x86_64 -flat_namespace -undefined suppress -lpcap
 else ifeq ($(UNAME_SYS), FreeBSD)
 	CC ?= cc
 	CFLAGS ?= -O3 -finline-functions -Wall -Wmissing-prototypes
@@ -55,11 +55,11 @@ COMPILE_CPP = $(cpp_verbose) $(CXX) $(CXXFLAGS) $(CPPFLAGS) -c
 all: $(PRIV_DIR)/checksum.so $(PRIV_DIR)/eth_driver.so
 
 $(PRIV_DIR)/checksum.so: checksum.o
-	@mkdir -p $(BASEDIR)/priv/
+	@mkdir -p $(PRIV_DIR)
 	$(link_verbose) $(CC) $< $(LDFLAGS) $(LDLIBS) -o $@
 
 $(PRIV_DIR)/eth_driver.so: eth_driver.o
-	@mkdir -p $(BASEDIR)/priv/
+	@mkdir -p $(PRIV_DIR)
 	$(link_verbose) $(CC) $< $(LDFLAGS) $(LDLIBS) -o $@
 
 %.o: %.c
