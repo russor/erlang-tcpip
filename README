@@ -1,0 +1,8 @@
+
+Build with 
+rebar3 compile
+
+Test with
+rebar3 eqc
+
+
