@@ -47,8 +47,8 @@ static ErlDrvData eth_start(ErlDrvPort port, char *buff);
 static void eth_stop(ErlDrvData drv_data);
 static void eth_input(ErlDrvData drv_data, ErlDrvEvent event);
 static void eth_timeout(ErlDrvData drv_data);
-static int eth_control(ErlDrvData drv_data, unsigned int command,
-		       char *buf, int len, char **rbuf, int rlen);
+static ErlDrvSSizeT eth_control(ErlDrvData drv_data, unsigned int command,
+                                char *buf, ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen);
 static void eth_outputv(ErlDrvData drv_data, ErlIOVec *ev);
 
 
@@ -98,6 +98,7 @@ static void attempt_to_read(ErlDrvData drv_data)
 	pkt = pcap_next(drv->pcap, &h);
 	while(buffer != NULL && pkt != NULL) {
 		memcpy(buffer->orig_bytes, pkt, h.caplen);
+                buffer->orig_size = h.caplen;
 		driver_output_binary(drv->port, NULL, 0, buffer, 0, h.caplen);
 		driver_free_binary(buffer);
 
@@ -221,15 +222,15 @@ static int get_iface_mtu(pcap_t *pcap, char *iface)
 	strncpy(ifr.ifr_name, iface, sizeof(ifr.ifr_name));
 
 	if (ioctl(fd, SIOCGIFMTU, &ifr) == -1) {
-	    perror("Error opening:");
-	    exit(EXIT_FAILURE);
+	    perror("Error getting mtu:");
+            return(1500);
 	}
 
 	return ifr.ifr_mtu;
 }
 
-static int eth_control(ErlDrvData drv_data, unsigned int command,
-		char *buf, int len, char **rbuf, int rlen)
+static ErlDrvSSizeT eth_control(ErlDrvData drv_data, unsigned int command,
+                                char *buf, ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen)
 {
 	struct eth_data *drv = (struct eth_data *) drv_data;
 	int selectable_sock;
