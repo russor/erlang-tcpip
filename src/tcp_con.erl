@@ -61,6 +61,7 @@ usr_send({Tcb, _Reader, _Writer}, Data) ->
 
 usr_recv({Tcb, _Reader, _Writer}, Bytes) ->
     State = tcb:get_tcbdata(Tcb, state),
+    io:format("State: ~p~n", [State]),
     case State:read(Tcb, Bytes) of
 	{ok, New_Bytes} ->
 	    read(Tcb, New_Bytes);
@@ -274,16 +275,11 @@ close(Tcb, Writer) ->
     wait_state(Tcb, [time_wait, closed]).
 
 accept(Tcb) ->
-    case tcb:get_tcbdata(Tcb, open_queue) of
-	empty ->
-	    tcb:subscribe(Tcb,open_queue),
-	    receive
-		open_con ->
-		    tcb:unsubscribe(Tcb, open_queue),
-		    accept(Tcb)
-	    end;
-	Socket ->
-	    {Other_Tcb, _, _} = Socket,
-	    link(Other_Tcb),
-	    Socket
+    tcb:subscribe(Tcb, listener_queue),
+    receive
+        {open_con, Socket} ->
+            tcb:unsubscribe(Tcb, listener_queue),
+            {Other_Tcb, _, _} = Socket,
+            link(Other_Tcb),
+            Socket
     end.

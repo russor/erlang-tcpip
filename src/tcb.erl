@@ -34,7 +34,7 @@
 -define(min(X,Y), case X < Y of true -> X; false -> Y end).
 -define(max(X,Y), case X > Y of true -> X; false -> Y end).
 
--record(observer, {state, rdata, sdata, open_queue}).
+-record(observer, {state, rdata, sdata, listener_queue}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -101,6 +101,9 @@ init(closed, Rt_Ip, Rt_Port) ->
 
 loop(Tcb, Observers) ->
     receive 
+        {set, open_queue, Value, _From} ->
+            {New_Tcb, New_Observers} = set(Tcb, Observers, open_queue, Value),
+            loop(New_Tcb, New_Observers);
 	{set, Param, Value, _From} ->
 	    New_Tcb = set(Tcb, Observers, Param, Value),
 	    loop(New_Tcb, Observers);
@@ -111,6 +114,10 @@ loop(Tcb, Observers) ->
 	{get, Param, From} ->
 	    New_Tcb = get(Tcb, Observers, Param, From),
 	    loop(New_Tcb, Observers);
+	{subscribe, listener_queue, From} ->
+	    From ! {tcb,ok},
+	    {New_Tcb, New_Observers} = add(listener_queue, From, Tcb, Observers),
+            loop(New_Tcb, New_Observers);
 	{subscribe, Param, From} ->
 	    From ! {tcb,ok},
 	    loop(Tcb, add(Param, From, Observers));
@@ -124,8 +131,8 @@ loop(Tcb, Observers) ->
 	{state, established, Socket} ->
 	    {Other_Tcb, _, _} = Socket,
 	    tcb:unsubscribe(Other_Tcb, state),
-	    New_Tcb = set(Tcb, Observers, open_queue, Socket),
-	    loop(New_Tcb, Observers);
+	    {New_Tcb, New_Observers} = set(Tcb, Observers, open_queue, Socket),
+	    loop(New_Tcb, New_Observers);
 	{state, _State, _} -> % Erase them if the connection closes??
 	    loop(Tcb, Observers);
 	{clone, From} ->
@@ -426,9 +433,15 @@ set(Tcb, Observers, open_queue, Socket) ->
     N_syn_queue = lists:filter(fun (X) -> if X==Socket -> false; 
 					     true -> true end end,
 			       Tcb#tcb.syn_queue),
-	notify(Tcb, Observers, open_queue),
-    Tcb#tcb{syn_queue = N_syn_queue, 
-	    open_queue = queue:cons(Socket, Tcb#tcb.open_queue)}.
+    case queue:out_r(Observers#observer.listener_queue) of
+        {{value, O}, New_Q} ->
+            O ! {open_con, Socket},
+            {Tcb#tcb{syn_queue = N_syn_queue}, Observers#observer{listener_queue = New_Q}};
+        {empty, _New_Q} ->
+            {Tcb#tcb{syn_queue = N_syn_queue,
+                     open_queue = queue:cons(Socket, Tcb#tcb.open_queue)},
+             Observers}
+    end.
     
 
 %%%%%%%%%%%%%%%%%%%%% Observer add and remove %%%%%%%%%%%%%%%%%%%%%%%
@@ -438,9 +451,19 @@ add(rdata, From, Observers) ->
 add(sdata, From, Observers) ->
     Observers#observer{sdata=From};
 add(state, From, Observers) ->
-    Observers#observer{state=From};
-add(open_queue, From, Observers) ->
-    Observers#observer{open_queue=From}.
+    Observers#observer{state=From}.
+
+add(listener_queue, From, Tcb, Observers) ->
+    New_Observers =
+        Observers#observer{
+          listener_queue=queue:cons(From, Observers#observer.listener_queue)},
+    case queue:out_r(Tcb#tcb.open_queue) of
+	{empty, _} ->
+            {Tcb, New_Observers};
+	{{value, Socket}, Q2} ->
+	    From ! {open_con, Socket},
+	    {Tcb#tcb{open_queue = Q2}, New_Observers}
+    end.
 
 remove(rdata, _, Observers) ->
     Observers#observer{rdata=false};
@@ -448,8 +471,11 @@ remove(sdata, _, Observers) ->
     Observers#observer{sdata=false};
 remove(state, _, Observers) ->
     Observers#observer{state=false};
-remove(open_queue, _, Observers) ->
-    Observers#observer{open_queue=false}.
+remove(listener_queue, From, Observers) ->
+    Observers#observer{
+      listener_queue=
+          queue:filter(fun(O) -> O =/= From end,
+                       Observers#observer.listener_queue)}.
 
 notify(Tcb, Observers, rdata) ->
     catch Observers#observer.rdata ! {rdata, Tcb#tcb.rbsize};
@@ -460,9 +486,9 @@ notify(Tcb, Observers, state) ->
     Tcb#tcb.reader ! {state, Tcb#tcb.state},
     Tcb#tcb.writer ! {state, Tcb#tcb.state},
     Socket = {self(), Tcb#tcb.reader, Tcb#tcb.writer},
-    catch Observers#observer.state ! {state, Tcb#tcb.state, Socket};
-notify(_Tcb, Observers, open_queue) ->
-    catch Observers#observer.open_queue ! open_con.
+    catch Observers#observer.state ! {state, Tcb#tcb.state, Socket}.
+%% notify(_Tcb, Observers, queue) ->
+%%     catch queue:out_r(Observers#observer.queue) ! open_con.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -470,7 +496,8 @@ init_observers() ->
     #observer{
 	  rdata = [],
 	  sdata = [],
-	  state = []
+	  state = [],
+          listener_queue = queue:new()
 	}.
 
 init_tcb(Rt_Ip, Rt_Port, State) ->
