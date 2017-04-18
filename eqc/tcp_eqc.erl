@@ -76,7 +76,7 @@ uint16() -> choose(0, 16#ffff).
 uint32() -> choose(0, 16#ffffffff).
 
 packet() ->
-  ?LET({Options, Data}, {eqc_gen:list(10, uint32()), binary()},
+  ?LET({Options, Data}, {[{mss, uint16()}], binary()},
   #pkt{sport    = port(),
        dport    = port(),
        seq      = uint32(),
@@ -85,7 +85,7 @@ packet() ->
        window   = uint16(),
        checksum = uint16(),
        urgent   = uint16(),
-       options  = << <<Word:32/big-integer>> || Word <- Options >>,
+       options  = Options,
        data     = Data }).
 
 %% -- Common pre-/post-conditions --------------------------------------------
