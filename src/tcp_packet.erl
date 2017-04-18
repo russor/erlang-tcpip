@@ -28,7 +28,7 @@
 -include("ip.hrl").
 
 -import(packet_check, [check_packet/4, compute_checksum/5]).
--export([parse/3, send_packet/2, send_packet/1]).
+-export([parse/3, send_packet/2, send_packet/1, find_option/3]).
 
 -define(DEFAULT_HDLEN, 5).
 
@@ -84,7 +84,7 @@ parse_packet(Src_Ip, Dst_Ip, Packet) ->
       _Checksum:16/big-integer,
       Urgent:16/big-integer,
       Rem/binary>> = Packet,
-    {Mss, Data} = get_options(Off, Rem), 
+    {Options, Data} = get_options(Off, Rem),
     {ok, #pkt{
       sip   = Src_Ip,
       dip   = Dst_Ip,
@@ -100,51 +100,58 @@ parse_packet(Src_Ip, Dst_Ip, Packet) ->
       is_fin= Is_Fin,
       window= Window,
       urgent= Urgent,
-      mss   = Mss,
+      mss   = find_option(Options, mss, -1),
+      options = Options,
       data  = Data,
-      data_size = size(Data)
+      data_size = size(Data),
+      segment_len = size(Packet),
+      offset = Off
      }}.
 
 %% Separates options and Data
+find_option(Opts, Key, Default) ->
+    case lists:keyfind(Key, 1, Opts) of
+        false ->
+            Default;
+        {Key, Value} ->
+            Value
+    end.
 
 get_options(Off, Rem) ->
     case Off of
-	5 -> % 20 bytes, ergo no options
-	    Smss = -1,
-	    Data = Rem;
+        5 -> % 20 bytes, ergo no options
+            {[], Rem};
 	X when X > 5 ->
 	    Opt_Size = (Off-5) * 4,
 	    <<Options:Opt_Size/binary,Data/binary>> = Rem,
-	    Smss = parse_options(Options);
+            {parse_options(Options), Data};
 	_ -> % Offset point to packet ??. Should return an error
-	    Smss = -1,
-	    Data = Rem
-    end,
-    {Smss, Data}.
+            {[], Rem}
+    end.
 
 %% Options Parser
 
-parse_options(<<>>) -> % Should parse more options
-    -1;
-parse_options(Options) ->
-    <<Kind:8/integer,
-      Rem/binary>> = Options,
-    case Kind of
-	0 -> % End of options
-	    -1;
-	1 -> % Nop
-	    parse_options(Rem);
-	2 -> % Mss
-	    <<_Len:8/integer,
-	      Smss:16/integer,
-	      _/binary>> = Rem,
-	    Smss;
-	_ ->
-	    <<Len:8/integer, Rem_2/binary>> = Rem,
-	    Size = Len - 2,
-	    <<_:Size/binary, Rest/binary>> = Rem_2,
-	    parse_options(Rest)
-    end.
+parse_options(Bin) ->
+    parse_options(Bin, []).
+
+parse_options(<<>>, Acc) -> % Should parse more options
+    Acc;
+parse_options(<<0:8>>, Acc) ->
+    %% EOL
+    Acc;
+parse_options(<<1:8, Rem/binary>>, Acc) ->
+    %% NOP
+    parse_options(Rem, Acc);
+parse_options(<<2:8, 4:8, Smss:16/integer, Rem/binary>>, Acc) ->
+    %% MSS
+    parse_options(Rem, [{mss, Smss} | Acc]);
+parse_options(<<19:8, 18:8, MD5:16/binary, Rem/binary>>, Acc) ->
+    %% RFC2385 MD5 hash
+    parse_options(Rem, [{md5, MD5} | Acc]);
+parse_options(<<Kind:8, Len:8/integer, Rem/binary>>, Acc) ->
+    OptLen = (Len - 2) * 8,
+    <<Opt:OptLen/integer, Rem1/binary>> = Rem,
+    parse_options(Rem1, [{unknown, {Kind, Opt}} | Acc]).
 
 
 %%%%%%%%%%%%%%%%%%% PACKET BUILDING %%%%%%%%%%%%%%%%%%%%%%%%%
@@ -167,33 +174,83 @@ prepare_retransmit(Tcb, Snd_Nxt, Seq_Len, Packet) when Seq_Len > 0 ->
 prepare_retransmit(_, _, _, _) ->
     ok.
 
+build_options(Options) ->
+    OptBin = lists:filtermap(fun build_option/1, Options),
+    O0 = << <<X/binary>> || X <- OptBin >>,
+    case byte_size(O0) rem 4 of
+        0 -> O0;
+        P -> << O0/binary, 0:((4 - P) * 8) >>
+    end.
+
+build_option({mss, Value})->
+    {true, <<2:8, 4:8, Value:16/big-integer>>};
+build_option({md5, Value}) ->
+    {true, <<19:8, 18:8, Value/binary>>};
+build_option(_) ->
+    false.
+
+options_size(Options) ->
+    S0 = lists:foldl(fun option_size/2, 0, Options),
+    case S0 rem 4 of
+        0 -> S0;
+        P -> S0 + (4 - P)
+    end.
+
+option_size({mss, _}, Acc) -> Acc + 4;
+option_size({md5, _}, Acc) -> Acc + 18;
+option_size(_, Acc) -> Acc.
+
+calculate_offset(Options) ->
+    5 + (options_size(Options) div 4).
+
 build_bin_packet(Tcb, Pkt) ->
-    case Pkt#pkt.is_syn of
-	1 ->
-	    Rmss = tcb:get_tcbdata(Tcb, rmss),
-	    Options = <<2:8/integer,
-		       4:8/integer,
-		       Rmss:16/big-integer>>,
-	    Hd_Len = 6; % Check this later when other options are added
-	0 ->
-	    Options = <<>>,
-	    Hd_Len = ?DEFAULT_HDLEN
-    end,
-    {Pre_Chk, Post_Chk} = build_bin_packet_1(Pkt, Hd_Len),
-    add_checksum(Pkt#pkt.sip, Pkt#pkt.dip, Pre_Chk, Post_Chk, 
-		 Options, Pkt#pkt.data, Pkt#pkt.data_size).
+    %% Set MD5 option as a default...
+    {Key, MD5_Opt} =
+        case tcb:get_tcbdata(Tcb, {rfc2385_keys, Pkt#pkt.dip}) of
+            [] -> {not_signed, []};
+            [{_I, K} | _] ->
+                %% use the first key
+                {K, [{md5, <<0:(8*16)>>}]}
+        end,
+    Options =
+        case Pkt#pkt.is_syn of
+            1 ->
+                [{mss, tcb:get_tcbdata(Tcb, rmss)} | MD5_Opt];
+            0 ->
+                MD5_Opt
+        end,
+    Offset = calculate_offset(Options),
+    SPkt = Pkt#pkt{options = Options,
+                   offset = Offset,
+                   segment_len = (Offset * 4) + Pkt#pkt.data_size
+                  },
+    {Pre_Chk, Post_Chk} = build_bin_packet_1(SPkt),
+    UpdatedOptions =
+        case Key of
+            not_signed -> Options;
+            _ ->
+                %% Calculate MD5 hash, and insert it into the Options list..
+                MD5Sum = packet_check:calculate_md5(SPkt, Key),
+                lists:map(
+                  fun({md5, _}) -> {md5, MD5Sum};
+                     (A) -> A
+                  end, Options)
+        end,
+    OptBin = build_options(UpdatedOptions),
+    add_checksum(SPkt#pkt.sip, SPkt#pkt.dip, Pre_Chk, Post_Chk,
+		 OptBin, SPkt#pkt.data, SPkt#pkt.data_size).
 
 build_bin_packet(Pkt) ->
-    {Pre_Chk, Post_Chk} = build_bin_packet_1(Pkt, ?DEFAULT_HDLEN),
+    {Pre_Chk, Post_Chk} = build_bin_packet_1(Pkt),
     add_checksum(Pkt#pkt.sip, Pkt#pkt.dip, Pre_Chk, Post_Chk,
 		 <<>>, Pkt#pkt.data, Pkt#pkt.data_size).
 
-build_bin_packet_1(Pkt, Hd_Len) ->
+build_bin_packet_1(Pkt) ->
     {<<(Pkt#pkt.sport):16/big-integer,
      (Pkt#pkt.dport):16/big-integer,
      (Pkt#pkt.seq):32/big-integer,
      (Pkt#pkt.ack):32/big-integer,
-     Hd_Len:4/integer,
+     (Pkt#pkt.offset):4/integer,
      0:6/integer, % Reserved
      (Pkt#pkt.is_urg):1/integer,
      (Pkt#pkt.is_ack):1/integer,

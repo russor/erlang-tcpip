@@ -89,7 +89,9 @@
 	  
 	  syn_queue = [],               % queue of opening connections for 
 	                                %   listen sockets
-	  open_queue= queue:new()       % queue of established connections for
+	  open_queue= queue:new(),      % queue of established connections for
 	                                %   listen sockets
+
+          rfc2385_keys = []             % Tuples of {ipaddr, key}
 }).
 

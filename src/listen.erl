@@ -50,6 +50,10 @@ process_syn(Tcb, Pkt, _Writer) ->
     case Pkt#pkt.is_syn of
 	1 ->
 	    {N_Tcb, N_Reader, N_Writer} = tcp_con:clone(Tcb),
+            Keys = tcb:get_tcbdata(Tcb, {rfc2385_keys, Pkt#pkt.sip}),
+            lists:foreach(
+              fun(IV) -> tcb:set_tcbdata(N_Tcb, rfc2385_key, IV) end,
+              Keys),
 	    tcb:syncset_tcbdata(Tcb, syn_queue, {N_Tcb, N_Reader, N_Writer}),
 	    
 	    tcb:set_tcbdata(N_Tcb, rsocket, {Pkt#pkt.sip, Pkt#pkt.sport}),

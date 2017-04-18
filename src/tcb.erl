@@ -269,6 +269,14 @@ get(Tcb, _, out_order, From) ->
 						  Tcb#tcb.rcv_nxt),
     From ! {tcbdata, Element},
     Tcb#tcb{out_order = New_List};
+get(Tcb, _, rfc2385_keys, From) ->
+    From ! {tcbdata, Tcb#tcb.rfc2385_keys},
+    Tcb;
+get(Tcb, _, {rfc2385_keys, IP}, From) ->
+    Keys = lists:filter(fun({I, _K}) -> I == IP end,
+                        Tcb#tcb.rfc2385_keys),
+    From ! {tcbdata, Keys},
+    Tcb;
 get(Tcb, _, open_queue, From) ->
     case queue:out_r(Tcb#tcb.open_queue) of
 	{empty, _} ->
@@ -425,6 +433,8 @@ set(Tcb, _, del_ack, Size) ->
 		    Tcb#tcb{dack_data = New_Size}
 	    end
     end;
+set(Tcb, _, rfc2385_key, {I, V}) ->
+    Tcb#tcb{rfc2385_keys = [{I, V} | Tcb#tcb.rfc2385_keys]};
 set(Tcb, _, syn_queue, Socket) ->
     {Other_Tcb, _, _} = Socket,
     tcb:subscribe(Other_Tcb, state),
@@ -533,6 +543,7 @@ get_available_window(Tcb) ->
     ?min(Tcb#tcb.snd_wnd, round(Tcb#tcb.cwnd)) -
    	seq:sub(Tcb#tcb.snd_nxt, Tcb#tcb.snd_una).
 
+%% TODO fix to include 19bytes of MD5 if required...
 get_data_size(Tcb) ->
     ?max(0, ?min(get_available_window(Tcb),
 	       ?min(Tcb#tcb.smss, Tcb#tcb.sbsize))).

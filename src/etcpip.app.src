@@ -21,7 +21,9 @@
   {applications, [
                   kernel,
                   stdlib,
-                  wx, runtime_tools, debugger
+                  crypto,
+                  wx, runtime_tools, debugger,
+                  eper
                  ]},
   {included_applications, []},
   {mod, {etcpip_app, []}},

@@ -25,7 +25,8 @@
 -module(socket).
 
 -export([start/0, open/3, open/4, listen/1, accept/1, recv/2, send/2, 
-	 send/4, close/1, string_to_ip/1]).
+	 send/4, close/1, string_to_ip/1,
+         set_sockopt/3]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -59,6 +60,9 @@ close(Conn) ->
 string_to_ip(Ip) ->
     T = string:tokens(Ip, "."),
     lists:foldl(fun (N, Acc) -> {N2, _} = string:to_integer(N), Acc*256+N2 end, 0, T).
+
+set_sockopt(Con, Option, Parameter) ->
+    tcp_con:usr_sockopt(Con, Option, Parameter).
     
 %%%%%%%%%%%%%%%%%%%%%%% INTERNAL FUNCTIONS %%%%%%%%%%%%%%%%%%
 
@@ -93,4 +97,3 @@ map_ip({A, B, C, D}) ->
     R.
 
 map_mac(<<E:48>>) -> E.
-    

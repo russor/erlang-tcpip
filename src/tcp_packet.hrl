@@ -39,5 +39,9 @@
 	      window,  % Window size
 	      urgent,  % Urgent pointer
 	      mss,     % Maximum segment size
+              options, % List of TCP options
 	      data,    % Packet Data
-	      data_size}). % Size of data
+	      data_size, % Size of data
+              segment_len, % Packet size
+              offset   % Offset to options in original packet
+         }).

@@ -24,8 +24,12 @@
 
 -module(packet_check).
 
+-include("tcb.hrl").
+-include("tcp_packet.hrl").
+-include("ip.hrl").
+
 -import(checksum, [checksum/1, checksum_1/1]).
--export([check_packet/4, compute_checksum/5]).
+-export([check_packet/4, compute_checksum/5, verify_md5/2, calculate_md5/2]).
 
 -define(BIG_PACKET, 100).
 
@@ -63,3 +67,65 @@ build_checksum_packet(Src_Ip, Dst_Ip, Protocol, Packet, Len) ->
 compute_checksum(Src_Ip, Dst_Ip, Protocol, Packet, Size) ->
     Chk_Packet = build_checksum_packet(Src_Ip, Dst_Ip, Protocol, Packet, Size),
     checksum(Chk_Packet).
+
+%% RFC2385 verification
+verify_md5(Tcb, Pkt) ->
+    Pkt_Opt = tcp_packet:find_option(Pkt#pkt.options, md5, not_present),
+    Tcb_Opt = tcb:get_tcbdata(Tcb, {rfc2385_keys, Pkt#pkt.sip}),
+    verify_md5(Pkt, Tcb_Opt, Pkt_Opt).
+
+verify_md5(_Pkt, [], not_present) ->
+    ok;
+verify_md5(_Pkt, TO, not_present) when length(TO) > 0 ->
+    md5_missing_signature;
+verify_md5(_Pkt, [], _Found) ->
+    md5_unexepected_signature;
+verify_md5(Pkt, TO, Opt) ->
+    BaseHash = calculate_base_md5(Pkt),
+    verify_md5_candidates(Opt, BaseHash, TO).
+
+verify_md5_candidates(_Found, _BaseHash, []) ->
+    %% None of the options gave a valid signature.
+    md5_bad_signature;
+verify_md5_candidates(Found, BaseHash, [{_I, Key} | Rem]) ->
+    %% Update the base hash with our test key and check...
+    C1 = crypto:hash_update(BaseHash, Key),
+    Hash = crypto:hash_final(C1),
+    case Hash =:= Found of
+        true -> ok;
+        _ -> %% Else continue on with remaining candidates
+            verify_md5_candidates(Found, BaseHash, Rem)
+    end.
+
+%% Partial MD5 of the packet - just need to add the 'key' (which is
+%% done when iterating the possible keys for a given connection
+calculate_base_md5(Pkt) ->
+    Pseudo_Header =
+        <<(Pkt#pkt.sip):32/big-integer,
+          (Pkt#pkt.dip):32/big-integer,
+          (?IP_PROTO_TCP):16/big-integer,
+          (Pkt#pkt.segment_len):16/big-integer,
+          (Pkt#pkt.sport):16/big-integer,
+          (Pkt#pkt.dport):16/big-integer,
+          (Pkt#pkt.seq):32/big-integer,
+          (Pkt#pkt.ack):32/big-integer,
+          (Pkt#pkt.offset):4/big-integer,
+          0:6/big-integer,
+          (Pkt#pkt.is_urg):1/integer,
+          (Pkt#pkt.is_ack):1/integer,
+          (Pkt#pkt.is_psh):1/integer,
+          (Pkt#pkt.is_rst):1/integer,
+          (Pkt#pkt.is_syn):1/integer,
+          (Pkt#pkt.is_fin):1/integer,
+          (Pkt#pkt.window):16/big-integer,
+          0:16/big-integer,       %% Assume checkum of zero
+          (Pkt#pkt.urgent):16/big-integer>>,
+    C1 = crypto:hash_init(md5),
+    C2 = crypto:hash_update(C1, Pseudo_Header),
+    C3 = crypto:hash_update(C2, Pkt#pkt.data),
+    C3.
+
+calculate_md5(Pkt, Key) ->
+    C1 = calculate_base_md5(Pkt),
+    C2 = crypto:hash_update(C1, Key),
+    crypto:hash_final(C2).
