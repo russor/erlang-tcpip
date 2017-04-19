@@ -22,6 +22,13 @@
 
 -include("tcp_pkt.hrl").
 
+opt_decode(<<>>, Acc) ->
+    Acc;
+opt_decode(<<0:8>> , Acc) ->
+    Acc;
+opt_decode(<<2:8, 4:8, Value:16/integer, Rem/binary>>, Acc) ->
+    opt_decode(Rem, [{mss, Value} | Acc]).
+
 decode(SrcIP, DstIP, Data) ->
   Packet = decode(Data),
   case verify_checksum(SrcIP, DstIP, Data) of
@@ -47,7 +54,8 @@ decode(Packet) ->
     Urgent:16/big-integer,
     Rest/binary>> = Packet,
   OptionSize = (Off - 5) * 4,
-  <<Options:OptionSize/binary, Data/binary>> = Rest,
+  <<OptionsBin:OptionSize/binary, Data/binary>> = Rest,
+  Options = opt_decode(OptionsBin, []),
   #pkt{
     sport    = SPort,
     dport    = DPort,
@@ -60,6 +68,9 @@ decode(Packet) ->
     urgent   = Urgent,
     options  = Options,
     data     = Data }.
+
+opt_encode({mss, Value}) ->
+    <<2:8, 4:8, Value:16/big-integer>>.
 
 encode(SrcIP, DstIP, Packet) ->
   encode(add_checksum(SrcIP, DstIP, Packet)).
@@ -74,9 +85,11 @@ encode(Packet) ->
           true  -> 1;
           false -> 0
         end end,
-  Pad     = (4 - size(Options0) rem 4) rem 4 * 8,
-  Options = <<Options0/binary, 0:Pad>>,
-  Off     = 5 + size(Options) div 4,
+  OptionsBin =
+        << <<X/binary>> || X <- lists:map(fun opt_encode/1, Options0) >>,
+  Pad     = (4 - size(OptionsBin) rem 4) rem 4 * 8,
+  Options = <<OptionsBin/binary, 0:Pad>>,
+  Off     = 5 + size(OptionsBin) div 4,
   <<SPort:16/big-integer,
     DPort:16/big-integer,
     Seq:32/big-integer,

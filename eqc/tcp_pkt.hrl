@@ -5,5 +5,5 @@
              , window = 65535
              , checksum
              , urgent = 0
-             , options = <<>>
+             , options = []
              , data = <<>> }).
