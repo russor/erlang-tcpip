@@ -24,14 +24,19 @@
 
 -module(socket).
 
--export([start/0, open/3, open/4, listen/1, accept/1, recv/2, send/2, 
+-export([start/0, start/1, open/3, open/4, listen/1, accept/1, recv/2, send/2,
 	 send/4, close/1, string_to_ip/1,
          set_sockopt/3]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
 
 start() ->
-    init().
+    {ok, Iface} = application:get_env(etcpip, iface),
+    eth_port:start(Iface),
+    init(eth_port).
+
+start(Module) ->
+    init(Module).
 
 open(tcp, Dst_Ip, Dst_Port) ->
     tcp_con:usr_open(Dst_Ip, Dst_Port).
@@ -66,22 +71,19 @@ set_sockopt(Con, Option, Parameter) ->
     
 %%%%%%%%%%%%%%%%%%%%%%% INTERNAL FUNCTIONS %%%%%%%%%%%%%%%%%%
 
-init() ->
+init(Module) ->
     Terms = application:get_all_env(etcpip),
     {value, {ip, EIp}} = lists:keysearch(ip, 1, Terms),
     {value, {netmask, ENetMask}} = lists:keysearch(netmask, 1, Terms),
     {value, {gateway, EGateWay}} = lists:keysearch(gateway, 1, Terms),
     {value, {mac, EMac}} = lists:keysearch(mac, 1, Terms),
-    {value, {iface, Iface}} = lists:keysearch(iface, 1, Terms),
     
     Ip = map_ip(EIp),
     NetMask = map_ip(ENetMask),
     GateWay = map_ip(EGateWay),
     Mac = map_mac(EMac),
     
-    erl_ddll:start(),
-    eth_port:start(Iface),
-    eth:start(Mac),
+    eth:start(Mac, Module),
     arp:start(Ip, Mac),
     checksum:start(),
     ip:start(Ip, NetMask, GateWay),

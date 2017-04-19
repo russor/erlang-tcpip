@@ -24,12 +24,12 @@
 
 -module(eth).
 
--export([start/1,init_reader/1, init_writer/1, send/3, recv/1, get_mtu/0]).
+-export([start/2,init_reader/1, init_writer/2, send/3, recv/1, get_mtu/0]).
 -include("eth.hrl").
 
 %%% API %%%%%%%%%
-start(Mac_Addr) ->
-    init(Mac_Addr).
+start(Mac_Addr, Module) ->
+    init(Mac_Addr, Module).
 
 send(Packet, Protocol, Mac_Addr) ->
     catch eth_writer ! {send, Packet, Protocol, Mac_Addr}.
@@ -46,26 +46,26 @@ get_mtu() ->
 
 %%% Reader and Writer Loops %%%%%%%
 
-init(Mac_Addr) ->
+init(Mac_Addr, Module) ->
     spawn(eth, init_reader, [Mac_Addr]),
-    spawn(eth, init_writer, [Mac_Addr]).
+    spawn(eth, init_writer, [Mac_Addr, Module]).
 
 init_reader(Mac_Addr) ->
     register(eth_reader, self()),
     reader_loop(Mac_Addr).
 
-init_writer(Mac_Addr) ->
+init_writer(Mac_Addr, Module) ->
     register(eth_writer, self()),
-    writer_loop(Mac_Addr).
+    writer_loop(Mac_Addr, Module).
 
-writer_loop(Mac_Addr) ->
+writer_loop(Mac_Addr, Module) ->
     receive
 	{send, Packet, Protocol, Dst_Mac_Addr} ->
-	    send_packet(Packet, Protocol, Dst_Mac_Addr, Mac_Addr);
+	    send_packet(Module, Packet, Protocol, Dst_Mac_Addr, Mac_Addr);
 	{get_mtu, From} ->
-	    From ! eth_port:get_mtu()
+	    From ! Module:get_mtu()
     end,
-    writer_loop(Mac_Addr).
+    writer_loop(Mac_Addr, Module).
 
 reader_loop(Mac_Addr) ->
     receive
@@ -75,7 +75,8 @@ reader_loop(Mac_Addr) ->
 					Protocol:recv(Data);
 				{error, Error} ->
 					{error, Error}; % Should probably implement an optional logging for decoding errors
-				_ ->
+				E ->
+                                        io:format("Recv error: ~p~n", [E]),
 					{error, unknown}
 			end
     end,
@@ -86,11 +87,11 @@ reader_loop(Mac_Addr) ->
 % Writer help Functions
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-send_packet(Packet, Protocol, Dst_Mac, Src_Mac) ->
+send_packet(Module, Packet, Protocol, Dst_Mac, Src_Mac) ->
     Eth_Protocol = protocol(Protocol),
-    eth_port:send([<<Dst_Mac:48/big-integer, Src_Mac:48/big-integer,
+    Module:send([<<Dst_Mac:48/big-integer, Src_Mac:48/big-integer,
 		   Eth_Protocol:16/big-integer>>, 
-		   Packet]).
+                 Packet]).
 	
 
 %% Ethernet protocol constant to atom, and viceversa
@@ -100,7 +101,10 @@ send_packet(Packet, Protocol, Dst_Mac, Src_Mac) ->
 protocol(ip) -> ?ETH_IP;
 protocol(arp) -> ?ETH_ARP;
 protocol(?ETH_IP) -> ip;
-protocol(?ETH_ARP) -> arp.
+protocol(?ETH_ARP) -> arp;
+protocol(Unknown) ->
+    io:format("unknown protocol ~p~n", [Unknown]),
+    unknown.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
