@@ -136,7 +136,7 @@ parse_options(Bin) ->
 
 parse_options(<<>>, Acc) -> % Should parse more options
     Acc;
-parse_options(<<0:8>>, Acc) ->
+parse_options(<<0:8, _Rem/binary>>, Acc) ->
     %% EOL
     Acc;
 parse_options(<<1:8, Rem/binary>>, Acc) ->

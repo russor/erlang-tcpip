@@ -68,6 +68,7 @@ rst(Src_Ip, SPort, Dst_Ip, DPort, Seq, Ack) ->
       urgent= 0,
       mss   = 0,
       data  = <<>>,
-      data_size = 0},
+      data_size = 0,
+      offset = 5},
     tcp_packet:send_packet(Pkt).
 
