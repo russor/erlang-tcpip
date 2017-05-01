@@ -193,8 +193,9 @@ accept_process(_S, [_Socket]) ->
 %% --- close ---
 
 close_pre(S) ->
-  in_tcp_state(S, [established, close_wait]) andalso
+  in_tcp_state(S, [established, close_wait, listen]) andalso
   lists:member(S#state.socket_type, [accept, connect]).
+
 
 close_args(S) ->
   [S#state.socket].
@@ -212,13 +213,19 @@ close(Socket) ->
 
 
 close_callouts(S, [_]) ->
-  ?APPLY(sent_fin, []),
   case S#state.tcp_state of
     close_wait ->
+      ?APPLY(sent_fin, []),
       ?SET(tcp_state, last_ack),
       ?BLOCK(close);
     established ->
+      ?APPLY(sent_fin, []),
       ?SET(tcp_state, fin_wait_1),
+      ?BLOCK(close);
+    _ ->
+      ?APPLY(reset, []),
+      ?SET(tcp_state, closed),
+      ?SET(socket_type, undefined),
       ?BLOCK(close)
   end.
 
@@ -529,7 +536,8 @@ adjacent([X, Y | Xs]) -> [{X, Y} || X /= Y] ++ adjacent([Y | Xs]);
 adjacent(_) -> [].
 
 prop_tcp() ->
-  eqc:dont_print_counterexample(
+  eqc_statem:show_states(
+  %eqc:dont_print_counterexample(
   with_parameter(default_process, worker,
   with_parameter(color, true,
   ?FORALL(Cmds, commands(?MODULE),
