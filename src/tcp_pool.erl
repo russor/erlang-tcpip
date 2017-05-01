@@ -82,7 +82,8 @@ loop(Ip) ->
 	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
 	    From ! {tcp_pool, ok, Ip, Lc_Port};
 	{remove, Socket} ->
-	    ets:delete(tcp_pool, Socket)
+            lists:foreach(fun(S) -> ets:delete_object(tcp_pool, S) end,
+                          ets:match_object(tcp_pool, {'_', Socket}))
     end,
     loop(Ip).
 

@@ -61,7 +61,6 @@ usr_send({Tcb, _Reader, _Writer}, Data) ->
 
 usr_recv({Tcb, _Reader, _Writer}, Bytes) ->
     State = tcb:get_tcbdata(Tcb, state),
-    io:format("State: ~p~n", [State]),
     case State:read(Tcb, Bytes) of
 	{ok, New_Bytes} ->
 	    read(Tcb, New_Bytes);
@@ -175,7 +174,7 @@ writer_loop(Tcb, State, Data_Avail) ->
 	    writer_loop(Tcb, New_State, Data_Avail)
     after 0 -> ok
     end,
-    {Timeout, Def_Msg} = check_send(Tcb, Data_Avail),
+    {Timeout, Def_Msg} = check_send(Tcb, State, Data_Avail),
     receive
 	{state, N_State} ->
 	    writer_loop(Tcb, N_State, Data_Avail);
@@ -202,7 +201,11 @@ procces_msg(Tcb, State, Event) ->
     
 
 %% Check if there is something to be sent
-check_send(Tcb, Data_Avail) ->
+check_send(Tcb, closed, 0) ->
+    {infinity, data};
+check_send(Tcb, listen, 0) ->
+    {infinity, data};
+check_send(Tcb, State, Data_Avail) ->
     case Data_Avail of
 	0 ->
 	    case tcb:get_tcbdata(Tcb, sbufsize) of
@@ -287,6 +290,9 @@ close(Tcb, Writer) ->
 accept(Tcb) ->
     tcb:subscribe(Tcb, listener_queue),
     receive
+        {open_con, closed} ->
+            %% Listen socket was closed...
+            closed;
         {open_con, Socket} ->
             tcb:unsubscribe(Tcb, listener_queue),
             {Other_Tcb, _, _} = Socket,
