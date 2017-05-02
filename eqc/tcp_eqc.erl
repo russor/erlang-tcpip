@@ -260,7 +260,7 @@ close_callouts(Ss, [_, Id]) ->
       ?APPLY(reset, [Id]),
       ?SET(Id, tcp_state, closed),
       ?SET(Id, socket_type, undefined);
-    {_, listen} ->
+    {listen, listen} ->
       ?APPLY(reset, [Id]),
       ?SET(Id, tcp_state, closed),
       ?SET(Id, socket_type, undefined);
