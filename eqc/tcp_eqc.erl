@@ -510,8 +510,12 @@ deliver_args(Ss) ->
   [choose(1, length(Ss))].
 
 deliver_pre(Ss, [Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  S#state.rcvd /= S#state.seq.
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [S] ->
+      S#state.rcvd /= S#state.seq;
+    _ ->
+      false
+  end.
 
 deliver(_) -> timer:sleep(1).
 
