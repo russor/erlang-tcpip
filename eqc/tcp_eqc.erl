@@ -263,11 +263,11 @@ close_callouts(Ss, [_, Id]) ->
       ?APPLY(sent_fin, [Id]),
       ?SET(Id, tcp_state, fin_wait_1),
       ?BLOCK({close, Id});
-    _ ->
+    listen ->
+      ?WHEN(S#state.socket_type == accept, ?UNBLOCK({accept, Id}, ok)),
       ?APPLY(reset, [Id]),
       ?SET(Id, tcp_state, closed),
-      ?SET(Id, socket_type, undefined),
-      ?BLOCK({close, Id})
+      ?SET(Id, socket_type, undefined)
   end.
 
 close_process(_, _) -> spawn.
