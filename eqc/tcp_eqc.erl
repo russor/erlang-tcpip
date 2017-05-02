@@ -116,7 +116,7 @@ postcondition_common(S, Call = {call, _, Cmd, _, _}, Res) ->
 %% --- start ---
 
 start_args(_S) ->
-  [ip(), 0].
+  [ip(), choose(1,3)].
 
 start(Ip, _) ->
   tcp_pool:start(ip2int(Ip)),
@@ -127,7 +127,7 @@ start(Ip, _) ->
 start_next(_S, _, [Ip, Nr]) ->
   [#state{tcp_state = closed,
           ip = Ip, 
-          id = N+1} || N<-lists:seq(0,Nr)].
+          id = N} || N<-lists:seq(1,Nr)].
 
 %% --- open (connect) ---
 
