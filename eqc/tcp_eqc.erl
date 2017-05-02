@@ -254,20 +254,24 @@ close(Socket, _) ->
 
 close_callouts(Ss, [_, Id]) ->
   [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  case S#state.tcp_state of
-    close_wait ->
+  case {S#state.tcp_state, S#state.socket_type} of
+    {listen, accept} ->
+      ?UNBLOCK({accept, Id}, ok),
+      ?APPLY(reset, [Id]),
+      ?SET(Id, tcp_state, closed),
+      ?SET(Id, socket_type, undefined);
+    {_, listen} ->
+      ?APPLY(reset, [Id]),
+      ?SET(Id, tcp_state, closed),
+      ?SET(Id, socket_type, undefined);
+    {close_wait, _} ->
       ?APPLY(sent_fin, [Id]),
       ?SET(Id, tcp_state, last_ack),
       ?BLOCK({close, Id});
-    established ->
+    {established, _} ->
       ?APPLY(sent_fin, [Id]),
       ?SET(Id, tcp_state, fin_wait_1),
-      ?BLOCK({close, Id});
-    listen ->
-      ?WHEN(S#state.socket_type == accept, ?UNBLOCK({accept, Id}, ok)),
-      ?APPLY(reset, [Id]),
-      ?SET(Id, tcp_state, closed),
-      ?SET(Id, socket_type, undefined)
+      ?BLOCK({close, Id})
   end.
 
 close_process(_, _) -> spawn.
@@ -528,6 +532,9 @@ deliver_callouts(Ss, [Id]) ->
 reset_callouts(_, [Id]) ->
   ?SET(Id, port,  undefined),
   ?SET(Id, rport, undefined),
+  ?SET(Id, rip, undefined),
+  ?SET(Id, socket, undefined),
+  ?SET(Id, rcvd,   undefined),
   ?SET(Id, seq,   undefined),
   ?SET(Id, rseq,  undefined).
 
