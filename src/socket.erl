@@ -24,7 +24,7 @@
 
 -module(socket).
 
--export([start/0, start/1, open/3, open/4, listen/1, accept/1, recv/2, send/2,
+-export([start/0, start/2, start_ip/1, open/3, open/4, listen/1, accept/1, recv/2, send/2,
 	 send/4, close/1, string_to_ip/1,
          set_sockopt/3]).
 
@@ -33,10 +33,13 @@
 start() ->
     {ok, Iface} = application:get_env(etcpip, iface),
     eth_port:start(Iface),
-    init(eth_port).
+    init(true, eth_port, arp).
 
-start(Module) ->
-    init(Module).
+start(PhyModule, L2Module) ->
+    init(true, PhyModule, L2Module).
+
+start_ip(L2Module) ->
+    init(false, unknown, L2Module).
 
 open(tcp, Dst_Ip, Dst_Port) ->
     tcp_con:usr_open(Dst_Ip, Dst_Port).
@@ -71,7 +74,7 @@ set_sockopt(Con, Option, Parameter) ->
     
 %%%%%%%%%%%%%%%%%%%%%%% INTERNAL FUNCTIONS %%%%%%%%%%%%%%%%%%
 
-init(Module) ->
+init(Full, PhyModule, L2Module) ->
     Terms = application:get_all_env(etcpip),
     {value, {ip, EIp}} = lists:keysearch(ip, 1, Terms),
     {value, {netmask, ENetMask}} = lists:keysearch(netmask, 1, Terms),
@@ -82,11 +85,15 @@ init(Module) ->
     NetMask = map_ip(ENetMask),
     GateWay = map_ip(EGateWay),
     Mac = map_mac(EMac),
-    
-    eth:start(Mac, Module),
-    arp:start(Ip, Mac),
+
+    case Full of
+        true->
+            eth:start(Mac, PhyModule),
+            arp:start(Ip, Mac);
+        _ -> ok
+    end,
     checksum:start(),
-    ip:start(Ip, NetMask, GateWay),
+    ip:start(Ip, NetMask, GateWay, L2Module),
     icmp:start(),
     udp:start(Ip),
     tcp_pool:start(Ip),
