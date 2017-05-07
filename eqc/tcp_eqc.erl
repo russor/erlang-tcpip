@@ -116,7 +116,7 @@ postcondition_common(S, Call = {call, _, Cmd, _, _}, Res) ->
 %% --- start ---
 
 start_args(_S) ->
-  [ip(), 0].
+  [ip(), choose(1,3)].
 
 start(Ip, _) ->
   tcp_pool:start(ip2int(Ip)),
@@ -127,7 +127,7 @@ start(Ip, _) ->
 start_next(_S, _, [Ip, Nr]) ->
   [#state{tcp_state = closed,
           ip = Ip, 
-          id = N+1} || N<-lists:seq(0,Nr)].
+          id = N} || N<-lists:seq(1,Nr)].
 
 %% --- open (connect) ---
 
@@ -198,8 +198,12 @@ accept_pre(Ss, [Socket, Id]) ->
     in_tcp_state(Ss, Id, [listen, syn_rcvd, established, close_wait]).
 
 accept_adapt(Ss, [_, Id]) -> 
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  [S#state.socket, Id].
+ case  [ S || S<-Ss, S#state.id == Id ] of
+   [S] ->
+     [S#state.socket, Id];
+   _ ->
+     false
+ end.
 
 accept(Socket, _) ->
   mock:set_socket(tcp_con:usr_accept(Socket)).
@@ -224,14 +228,22 @@ close_args(Ss) ->
        [S#state.socket, S#state.id]).
 
 close_pre(Ss, [Socket, Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  S#state.socket == Socket andalso
-    in_tcp_state(Ss, Id, [established, close_wait, listen]) andalso
-    lists:member(S#state.socket_type, [accept, connect]).
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      S#state.socket == Socket andalso
+        in_tcp_state(Ss, Id, [established, close_wait, listen]) andalso
+        lists:member(S#state.socket_type, [accept, connect, listen]);
+    _ ->
+      false
+  end.
 
 closet_adapt(Ss, [_, Id]) -> 
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  [S#state.socket, Id].
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      [S#state.socket, Id];
+    _ ->
+      false
+  end.
 
 close(Socket, _) ->
   Root = self(),
@@ -242,19 +254,23 @@ close(Socket, _) ->
 
 close_callouts(Ss, [_, Id]) ->
   [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  case S#state.tcp_state of
-    close_wait ->
+  case {S#state.tcp_state, S#state.socket_type} of
+    {listen, accept} ->
+      ?UNBLOCK({accept, Id}, ok),
+      ?APPLY(reset, [Id]),
+      ?SET(Id, tcp_state, closed),
+      ?SET(Id, socket_type, undefined);
+    {listen, listen} ->
+      ?APPLY(reset, [Id]),
+      ?SET(Id, tcp_state, closed),
+      ?SET(Id, socket_type, undefined);
+    {close_wait, _} ->
       ?APPLY(sent_fin, [Id]),
       ?SET(Id, tcp_state, last_ack),
       ?BLOCK({close, Id});
-    established ->
+    {established, _} ->
       ?APPLY(sent_fin, [Id]),
       ?SET(Id, tcp_state, fin_wait_1),
-      ?BLOCK({close, Id});
-    _ ->
-      ?APPLY(reset, [Id]),
-      ?SET(Id, tcp_state, closed),
-      ?SET(Id, socket_type, undefined),
       ?BLOCK({close, Id})
   end.
 
@@ -283,14 +299,22 @@ syn(Ip, Port, RemoteIp, RemotePort, RemoteSeq, _Id) ->
   ok.
 
 syn_pre(Ss, [Ip, Port, _, _, _, Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  S#state.ip   == Ip andalso
-  S#state.port == Port andalso
-    in_tcp_state(Ss, Id, listen).
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      S#state.ip   == Ip andalso
+        S#state.port == Port andalso
+        in_tcp_state(Ss, Id, listen);
+    _ ->
+      false
+  end.
 
 syn_adapt(Ss, [_, _, Ip, Port, Seq, Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  [S#state.ip, S#state.port, Ip, Port, Seq, Id].
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      [S#state.ip, S#state.port, Ip, Port, Seq, Id];
+    _ ->
+      false
+  end.
 
 syn_callouts(_S, [_Ip,  _Port, RemoteIp, RemotePort, RemoteSeq, Id]) ->
   ?SET(Id, rip, RemoteIp),
@@ -312,19 +336,27 @@ syn_ack_args(Ss) ->
         S#state.rport, uint32(), S#state.seq, S#state.id]).
 
 syn_ack_pre(Ss, [Ip, Port, RIp, RPort, _, Seq, Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  in_tcp_state(Ss, Id, syn_sent) andalso
-    S#state.rcvd == S#state.seq andalso
-    Ip    == S#state.ip    andalso
-    Port  == S#state.port  andalso
-    RIp   == S#state.rip   andalso
-    RPort == S#state.rport andalso
-    Seq   == S#state.seq.
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      in_tcp_state(Ss, Id, syn_sent) andalso
+        S#state.rcvd == S#state.seq andalso
+        Ip    == S#state.ip    andalso
+        Port  == S#state.port  andalso
+        RIp   == S#state.rip   andalso
+        RPort == S#state.rport andalso
+        Seq   == S#state.seq;
+    _ ->
+      false
+  end.
 
 syn_ack_adapt(Ss, [_, _, _, _, Seq, _, Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  [S#state.ip, S#state.port, S#state.rip,
-   S#state.rport, Seq, S#state.seq, Id].
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      [S#state.ip, S#state.port, S#state.rip,
+       S#state.rport, Seq, S#state.seq, Id];
+    _ ->
+      false
+  end.
 
 syn_ack(Ip, Port, RemoteIp, RemotePort, Seq, Ack, _) ->
   Packet =
@@ -357,23 +389,31 @@ ack_args(Ss) ->
         S#state.seq, S#state.id]).
 
 ack_pre(Ss, [Ip,  Port, RIp, RPort, Seq, Ack, Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  in_tcp_state(Ss, Id, [syn_rcvd, last_ack, fin_wait_1, closing]) andalso
-    S#state.seq == S#state.rcvd andalso
-    Ip    == S#state.ip    andalso
-    Port  == S#state.port  andalso
-    RIp   == S#state.rip   andalso
-    RPort == S#state.rport andalso
-    Seq   == S#state.rseq andalso
-    Ack   == S#state.seq.
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      in_tcp_state(Ss, Id, [syn_rcvd, last_ack, fin_wait_1, closing]) andalso
+        S#state.seq == S#state.rcvd andalso
+        Ip    == S#state.ip    andalso
+        Port  == S#state.port  andalso
+        RIp   == S#state.rip   andalso
+        RPort == S#state.rport andalso
+        Seq   == S#state.rseq andalso
+        Ack   == S#state.seq;
+    _ ->
+      false
+  end.
 
 ack_adapt(Ss, [_, _, _, _, _, _, Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  [S#state.ip, S#state.port,
-   S#state.rip,
-   S#state.rport,
-   S#state.rseq,
-   S#state.seq, Id].
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      [S#state.ip, S#state.port,
+       S#state.rip,
+       S#state.rport,
+       S#state.rseq,
+       S#state.seq, Id];
+    _ ->
+      false
+  end.
 
 ack(Ip,  Port, RemoteIp, RemotePort, Seq, Ack, _) ->
   Packet =
@@ -425,10 +465,14 @@ fin_pre(Ss, [Ip, Port, RIp, RPort, Seq, Ack, Id]) ->
     Ack   == S#state.rcvd.
     
 fin_adapt(Ss, [_, _, _, _, _, _, Id]) -> 
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  [S#state.ip, S#state.port,
-   S#state.rip, S#state.rport,
-   S#state.rseq, S#state.rcvd, Id].
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [ S ] ->
+      [S#state.ip, S#state.port,
+       S#state.rip, S#state.rport,
+       S#state.rseq, S#state.rcvd, Id];
+    _ ->
+      false
+  end.
 
 fin(Ip, Port, RemoteIp, RemotePort, Seq, Ack, _) ->
   Packet =
@@ -470,8 +514,12 @@ deliver_args(Ss) ->
   [choose(1, length(Ss))].
 
 deliver_pre(Ss, [Id]) ->
-  [ S ] = [ S || S<-Ss, S#state.id == Id ],
-  S#state.rcvd /= S#state.seq.
+  case [ S || S<-Ss, S#state.id == Id ] of
+    [S] ->
+      S#state.rcvd /= S#state.seq;
+    _ ->
+      false
+  end.
 
 deliver(_) -> timer:sleep(1).
 
@@ -484,6 +532,9 @@ deliver_callouts(Ss, [Id]) ->
 reset_callouts(_, [Id]) ->
   ?SET(Id, port,  undefined),
   ?SET(Id, rport, undefined),
+  ?SET(Id, rip, undefined),
+  ?SET(Id, socket, undefined),
+  ?SET(Id, rcvd,   undefined),
   ?SET(Id, seq,   undefined),
   ?SET(Id, rseq,  undefined).
 

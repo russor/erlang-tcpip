@@ -25,7 +25,7 @@
 -module(ip).
 
 -import(checksum,[checksum/1, checksum_1/1]).
--export([start/3,init_reader/2,init_writer/3,recv/1,send/4, fragment/4,
+-export([start/4,init_reader/2,init_writer/4,recv/1,send/4, fragment/4,
 	 change_mtu/2, dst_unreachable/1, get_mtu/0]).
 
 -include("ip.hrl").
@@ -35,8 +35,8 @@
 
 %%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-start(Ip_Addr, NetMask, Default_Gateway) ->
-    init(Ip_Addr, NetMask, Default_Gateway).
+start(Ip_Addr, NetMask, Default_Gateway, L2Module) ->
+    init(Ip_Addr, NetMask, Default_Gateway, L2Module).
 
 recv(Packet) ->
     catch ip_reader ! {recv, Packet}.
@@ -48,7 +48,7 @@ send(Packet, Len, Protocol, Ip_Addr) ->
     catch ip_writer ! {send, Packet, Len, Protocol, Ip_Addr}.
 
 get_mtu() ->
-    eth:get_mtu(). % Should probably implement some way of having different link layer protocols here
+    catch ip_writer ! {get_mtu}. %% eth:get_mtu(). % Should probably implement some way of having different link layer protocols here
 
 change_mtu(Packet, MTU) ->
     catch ip_reader ! {mtu, Packet, MTU}.
@@ -60,8 +60,8 @@ dst_unreachable(Packet) ->
 
 %%%%%%%%%% Reader and Writer Loops %%%%%%%%%%%%
 
-init(Ip_Addr, NetMask, Default_Gateway) ->
-    spawn_link(ip, init_writer, [Ip_Addr, NetMask, Default_Gateway]),
+init(Ip_Addr, NetMask, Default_Gateway, Module) ->
+    spawn_link(ip, init_writer, [Ip_Addr, NetMask, Default_Gateway, Module]),
     spawn_link(ip, init_reader, [Ip_Addr, NetMask]).
 
 init_reader(Ip_Addr, NetMask) ->
@@ -70,10 +70,10 @@ init_reader(Ip_Addr, NetMask) ->
     ets:new(mtu, [set, public, named_table]),
     reader_loop(Ip_Addr, NetMask).
 
-init_writer(Ip_Addr, NetMask, Default_Gateway) ->
+init_writer(Ip_Addr, NetMask, Default_Gateway, Module) ->
     register(ip_writer, self()),
     put(frg_id, 1),
-    writer_loop(Ip_Addr, NetMask, Default_Gateway).
+    writer_loop(Ip_Addr, NetMask, Default_Gateway, Module).
 
 reader_loop(Ip_Addr, NetMask) ->
     receive
@@ -91,21 +91,23 @@ reader_loop(Ip_Addr, NetMask) ->
     end,
     reader_loop(Ip_Addr, NetMask).
 
-writer_loop(Ip_Addr, NetMask, Default_Gateway) ->
+writer_loop(Ip_Addr, NetMask, Default_Gateway, Module) ->
 	receive
-		{send, Packet, Len, Protocol, Dst_Ip} ->
-			send_packet(Packet, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway)
+            {send, Packet, Len, Protocol, Dst_Ip} ->
+                send_packet(Packet, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module);
+            {get_mtu} ->
+                Module:get_mtu()
     end,
-    writer_loop(Ip_Addr, NetMask, Default_Gateway).
+    writer_loop(Ip_Addr, NetMask, Default_Gateway, Module).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-send_packet(Data, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway) ->
-    {Gateway, DF} = route(Dst_Ip, Ip_Addr, NetMask, Default_Gateway),
+send_packet(Data, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module) ->
+    {Gateway, DF} = route(Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module),
     {Pre_Chk, Post_Chk} = build_header(Len, Protocol, Dst_Ip, Ip_Addr, DF),
     Checksum = checksum_1([Pre_Chk, Post_Chk]),
     Packet = [Pre_Chk, <<Checksum:16/integer>>, Post_Chk, Data],
-    arp:send(Packet, Gateway).
+    Module:send(Packet, Gateway).
 
 %% Header is built as a tuple with two binaries which are the parts that come before and after the checksum.
 %% Checksum is computed using a c driver for speed
@@ -134,12 +136,12 @@ protocol(?IP_PROTO_ICMP) -> icmp;
 protocol(?IP_PROTO_TCP) -> tcp;
 protocol(?IP_PROTO_UDP) -> udp.
 
-route(Dst_Ip, Ip_Addr, NetMask, Default_Gateway) -> % To be rewritten
+route(Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module) -> % To be rewritten
     case ets:lookup(mtu, Dst_Ip) of
 	[{_, GateWay, _, DF}] ->
 	    {GateWay, DF};
 	_ ->
-	    {mtu, MTU} = eth:get_mtu(),
+	    MTU = Module:get_mtu(),
 	    if 
 		(Dst_Ip band NetMask) == (Ip_Addr band NetMask) ->
 		    ets:insert(mtu, {Dst_Ip, Dst_Ip, MTU, 1}),

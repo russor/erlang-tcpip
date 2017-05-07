@@ -71,6 +71,11 @@ process_syn(Tcb, Pkt, _Writer) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%% WRITER %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+send(Tcb, {send, fin}) ->
+    %% tcb:syncset_tcbdata(Tcb, state, closed),
+    %% tcb:close(Tcb),
+    tcp_con:close_connection(Tcb),
+    ok;
 send(_, _) ->
     ok.
 

@@ -126,6 +126,9 @@ loop(Tcb, Observers) ->
 	close ->
 	    cancel_timers(Tcb),
 	    set(Tcb, Observers, state, closed),
+            notify(Tcb, Observers, closed),
+            lists:foreach(fun(S) -> socket:close(S) end,
+                          queue:to_list(Tcb#tcb.open_queue)),
 	    exit(Tcb#tcb.writer, normal),
 	    exit(Tcb#tcb.reader, normal);
 	{state, established, Socket} ->
@@ -496,7 +499,10 @@ notify(Tcb, Observers, state) ->
     Tcb#tcb.reader ! {state, Tcb#tcb.state},
     Tcb#tcb.writer ! {state, Tcb#tcb.state},
     Socket = {self(), Tcb#tcb.reader, Tcb#tcb.writer},
-    catch Observers#observer.state ! {state, Tcb#tcb.state, Socket}.
+    catch Observers#observer.state ! {state, Tcb#tcb.state, Socket};
+notify(Tcb, Observers, closed) ->
+    lists:foreach(fun(O) -> O ! {open_con, closed} end, 
+                  queue:to_list(Observers#observer.listener_queue)).
 %% notify(_Tcb, Observers, queue) ->
 %%     catch queue:out_r(Observers#observer.queue) ! open_con.
 

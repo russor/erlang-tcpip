@@ -24,7 +24,8 @@
 
 -module(arp).
 
--export([start/2,init_reader/2, init_writer/2, ip_queue_init/2, send/2, answer/2, solve/1, recv/1]).
+-export([start/2,init_reader/2, init_writer/2, ip_queue_init/2, send/2, answer/2, solve/1, recv/1,
+         get_mtu/0]).
 
 -include("eth.hrl").
 
@@ -58,6 +59,10 @@ solve(Ip_Addr) ->
 % Received an arp packet
 recv(Packet) ->    
     catch arp_reader ! Packet.
+
+get_mtu() ->
+    {mtu, MTU} = eth:get_mtu(),
+    MTU.
 
 
 %%%%%%%%%% Queue, Reader and Writer Loops %%%%%%%%%%%%%
