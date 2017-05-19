@@ -58,7 +58,7 @@
 -define(MAX_SOCKETS, 5).
 
 -record(socket,{tcp_state = undefined, ip, port, rip, rport, socket,
-               socket_type, seq, rcvd, rseq, id, parent, accepts = []}).
+               socket_type, seq, rcvd, rseq, id, parent, blocked = []}).
 
 -record(state, {ip, sockets = []}).
 
@@ -72,6 +72,13 @@ in_tcp_state(S, Id, TcpStates) when is_list(TcpStates) ->
   end;
 in_tcp_state(Ss, Id, TcpState) ->
   in_tcp_state(Ss, Id, [TcpState]).
+
+sockets_in_state(S, TcpStates) when is_list(TcpStates) ->
+  [ Sock || Sock <- S#state.sockets,
+            lists:member(Sock#socket.tcp_state, TcpStates) ];
+sockets_in_state(S, TcpState) ->
+  sockets_in_state(S, [TcpState]).
+  
 
 get_socket(S, Id) ->
   lists:keyfind(Id, #socket.id, S#state.sockets).
@@ -132,9 +139,6 @@ start_next(S, _, [Ip]) ->
 
 %% --- open (connect) ---
 
-%% open_pre(S) ->
-%%   in_tcp_state(S, closed).
-
 open_args(_) ->
   [ip(), port()].
 
@@ -160,9 +164,6 @@ open_callouts(_S, [RemoteIp, RemotePort]) ->
 
 %% --- listen ---
 
-%% listen_pre(S) ->
-%%   in_tcp_state(S, closed).
-
 listen_args(_) ->
   [port()].
 
@@ -181,25 +182,18 @@ listen_callouts(_S, [Port]) ->
 
 %% --- accept ---
 
-%% accept_pre(S) ->
-%%   in_tcp_state(S, [listen, syn_rcvd, established, close_wait]) andalso
-%%   S#socket.socket_type == listen.
-
-%% We cannot accept when we closed the listen socket, it's not there any more!
-
 accept_pre(S) ->
-  [] /= S#state.sockets.
+  [] /= sockets_in_state(S, listen).
 
 accept_args(S) ->
-  ?LET(Sock, elements(S#state.sockets),
+  ?LET(Sock, elements(sockets_in_state(S, listen)),
        [Sock#socket.socket, Sock#socket.id]).
 
 accept_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{} ->
       Sock#socket.socket == Socket andalso
-      Sock#socket.socket_type == listen andalso
-      in_tcp_state(S, Id, [listen, syn_rcvd, established, close_wait]);
+      Sock#socket.tcp_state == listen;
     false -> false
   end.
 
@@ -227,7 +221,7 @@ accept_callouts(S, [_Socket, Id]) ->
       ?APPLY(set_socket, [NewId]);
     [] ->
       Sock = get_socket(S, Id),
-      ?SET(Id, accepts, Sock#socket.accepts ++ [?SELF]),
+      ?SET(Id, blocked, Sock#socket.blocked ++ [?SELF]),
       ?MATCH(NewId, ?BLOCK({accept, ?SELF})),
       ?WHEN(NewId /= closed, ?APPLY(set_socket, [NewId]))
   end.
@@ -237,15 +231,14 @@ accept_process(_S, [_Socket, _]) ->
 
 %% --- close ---
 
-%% close_pre(S) ->
-%%   in_tcp_state(S, [established, close_wait, listen]) andalso
-%%   lists:member(S#socket.socket_type, [accept, connect]).
+close_states() ->
+  [established, close_wait, listen].
 
 close_pre(S) ->
-  [] /= S#state.sockets.
+  [] /= sockets_in_state(S, close_states()).
 
 close_args(S) ->
-  ?LET(Sock, elements(S#state.sockets),
+  ?LET(Sock, elements(sockets_in_state(S, close_states())),
        [Sock#socket.socket, Sock#socket.id]).
 
 close_pre(S, [Socket, Id]) ->
@@ -253,8 +246,7 @@ close_pre(S, [Socket, Id]) ->
     Sock = #socket{} ->
       Sock#socket.socket == Socket andalso
       Socket /= undefined andalso
-      in_tcp_state(S, Id, [established, close_wait, listen]) andalso
-      lists:member(Sock#socket.socket_type, [accept, connect, listen]);
+      in_tcp_state(S, Id, close_states());
     _ ->
       false
   end.
@@ -278,14 +270,15 @@ close_callouts(S, [_, Id]) ->
   Sock = get_socket(S, Id),
   case Sock#socket.socket_type of
     listen ->
-      ?PAR([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.accepts ] ++
+      ?PAR([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.blocked ] ++
            [ ?APPLY(do_close, [Child#socket.id]) || 
              Child <- S#state.sockets, Child#socket.parent == Id,
              Child#socket.socket == undefined ]),  
       ?APPLY(reset, [Id]);
     _ ->
       ?APPLY(do_close, [Id]),
-      ?BLOCK({close, Id}) 
+      ?SET(Id, blocked, [?SELF]),
+      ?BLOCK({close, ?SELF}) 
   end.
 
 close_process(_, _) -> spawn.
@@ -311,10 +304,10 @@ do_close_callouts(S, [Id]) ->
 %%   in_tcp_state(S, listen).
 
 syn_pre(S) ->
-  [] /= S#state.sockets.
+  [] /= sockets_in_state(S, listen).
 
 syn_args(S) ->
-  ?LET(Sock, elements(S#state.sockets),
+  ?LET(Sock, elements(sockets_in_state(S, listen)),
        [Sock#socket.ip, Sock#socket.port, ip(), port(), uint32(), Sock#socket.id]).
 
 syn(Ip, Port, RemoteIp, RemotePort, RemoteSeq, _Id) ->
@@ -358,10 +351,10 @@ syn_callouts(_S, [_Ip,  Port, RemoteIp, RemotePort, RemoteSeq, Id]) ->
 %%   S#socket.rcvd == S#socket.seq.
 
 syn_ack_pre(S) ->
-  [] /= S#state.sockets.
+  [] /= sockets_in_state(S, syn_sent).
 
 syn_ack_args(S) ->
-  ?LET(Sock, elements(S#state.sockets),
+  ?LET(Sock, elements(sockets_in_state(S, syn_sent)),
        [Sock#socket.ip, Sock#socket.port, Sock#socket.rip,
         Sock#socket.rport, uint32(), Sock#socket.seq, Sock#socket.id]).
 
@@ -406,15 +399,14 @@ syn_ack_callouts(_S, [_Ip, _Port, _RemoteIp, _RemotePort, Seq, _Ack, Id]) ->
 
 %% --- ack ---
 
-%% ack_pre(S) ->
-%%   in_tcp_state(S, [syn_rcvd, last_ack, fin_wait_1, closing]) andalso
-%%   S#socket.seq == S#socket.rcvd.
+ack_states() ->
+  [syn_rcvd, last_ack, fin_wait_1, closing].
 
 ack_pre(S) ->
-  [] /= S#state.sockets.
+  [] /= sockets_in_state(S, ack_states()).
 
 ack_args(S) ->
-  ?LET(Sock, elements(S#state.sockets),
+  ?LET(Sock, elements(sockets_in_state(S, ack_states())),
        [Sock#socket.ip, Sock#socket.port,
         Sock#socket.rip,
         Sock#socket.rport,
@@ -424,7 +416,7 @@ ack_args(S) ->
 ack_pre(S, [Ip,  Port, RIp, RPort, Seq, Ack, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{} ->
-      in_tcp_state(S, Id, [syn_rcvd, last_ack, fin_wait_1, closing]) andalso
+      in_tcp_state(S, Id, ack_states()) andalso
         Sock#socket.seq == Sock#socket.rcvd andalso
         Ip    == Sock#socket.ip    andalso
         Port  == Sock#socket.port  andalso
@@ -466,9 +458,9 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
       ?SET(Id, tcp_state, established),
       P = Sock#socket.parent,
       case get_socket(S, P) of
-        #socket{accepts = [Pid | Pids]} ->
+        #socket{blocked = [Pid | Pids]} ->
           ?UNBLOCK({accept, Pid}, Id),
-          ?SET(P, accepts, Pids);
+          ?SET(P, blocked, Pids);
         %% false -> %% parent closed, we need to send FIN (patch against impl).
         %%   ?APPLY(do_close, [Id]);
         _ -> ?EMPTY
@@ -476,10 +468,10 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
     fin_wait_1 ->
       ?SET(Id, tcp_state, fin_wait_2);
     closing ->
-      ?UNBLOCK({close, Id}, ok),
+      ?APPLY(unblock_close, [Id]),
       ?SET(Id, tcp_state, time_wait);
     last_ack ->
-      ?UNBLOCK({close, Id}, ok),
+      ?APPLY(unblock_close, [Id]),
       ?APPLY(reset, [Id])
   end.
 
@@ -488,17 +480,20 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
 %% fin_pre(S) ->
 %%   in_tcp_state(S, [established, fin_wait_1, fin_wait_2]).
 
+fin_states() ->
+  [established, fin_wait_1, fin_wait_2].
+
 fin_pre(S) ->
-  [] /= S#state.sockets.
+  [] /= sockets_in_state(S, fin_states()).
 
 fin_args(S) ->
-  ?LET(Sock, elements(S#state.sockets), 
+  ?LET(Sock, elements(sockets_in_state(S, fin_states())), 
        [Sock#socket.ip, Sock#socket.port,
         Sock#socket.rip, Sock#socket.rport,
         Sock#socket.rseq, Sock#socket.rcvd, Sock#socket.id]). 
 
 fin_pre(S, Args = [_Ip, _Port, _RIp, _RPort, _Seq, _Ack, Id]) ->
-  in_tcp_state(S, Id, [established, fin_wait_1, fin_wait_2]) andalso
+  in_tcp_state(S, Id, fin_states()) andalso
     fin_adapt(S, Args) == Args.
     
 fin_adapt(S, [_, _, _, _, _, _, Id]) -> 
@@ -532,13 +527,13 @@ fin_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _, Id]) ->
     fin_wait_1 ->
       case Sock#socket.seq == Sock#socket.rcvd of %% FIN+ACK ?
         true ->
-          ?UNBLOCK({close, Id}, ok),
+          ?APPLY(unblock_close, [Id]),
           ?SET(Id, tcp_state, time_wait);
         false ->
           ?SET(Id, tcp_state, closing)
       end;
     fin_wait_2  ->
-      ?UNBLOCK({close, Id}, ok),
+      ?APPLY(unblock_close, [Id]),
       ?SET(Id, tcp_state, time_wait)
   end.
 
@@ -621,6 +616,11 @@ sent_callouts(S, [Id]) ->
 set_socket_callouts(_, [Id]) ->
   ?MATCH({Socket, ok}, ?CALLOUT(mock, set_socket, [?VAR], ok)),
   ?SET(Id, socket, Socket).
+
+unblock_close_callouts(S, [Id]) ->
+  Sock = get_socket(S, Id),
+  ?PAR([ ?UNBLOCK({close, Pid}, ok) || Pid <- Sock#socket.blocked ]).
+
 
 set_next(S, _, [Id, Key, Value]) ->
   Sock = get_socket(S, Id),
