@@ -155,11 +155,11 @@ open_callouts(_S, [RemoteIp, RemotePort]) ->
   ?SET(Id, rport, RemotePort),
   ?MATCH(Port, ?APPLY(sent_syn, [Id])),
   ?SET(Id, tcp_state, syn_sent),
+  ?SET(Id, socket_type, connect),
   ?SET(Id, port, Port),
   ?BLOCK({syn_sent, Id}),
   ?PAR([ ?APPLY(set_socket, [Id])
        , ?APPLY(sent_ack, [Id]) ]),
-  ?SET(Id, socket_type, connect),
   ?SET(Id, tcp_state, established).
 
 %% --- listen ---
@@ -346,15 +346,15 @@ syn_callouts(_S, [_Ip,  Port, RemoteIp, RemotePort, RemoteSeq, Id]) ->
 
 %% --- syn_ack ---
 
-%% syn_ack_pre(S) ->
-%%   in_tcp_state(S, syn_sent) andalso
-%%   S#socket.rcvd == S#socket.seq.
+syn_ack_sockets(S) ->
+  [ Sock || Sock <- sockets_in_state(S, syn_sent),
+            Sock#socket.rcvd == Sock#socket.seq ].
 
 syn_ack_pre(S) ->
-  [] /= sockets_in_state(S, syn_sent).
+  [] /= syn_ack_sockets(S).
 
 syn_ack_args(S) ->
-  ?LET(Sock, elements(sockets_in_state(S, syn_sent)),
+  ?LET(Sock, elements(syn_ack_sockets(S)),
        [Sock#socket.ip, Sock#socket.port, Sock#socket.rip,
         Sock#socket.rport, uint32(), Sock#socket.seq, Sock#socket.id]).
 
@@ -542,26 +542,25 @@ fin_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _, Id]) ->
 %% deliver_pre(S) ->
 %%   S#socket.rcvd /= S#socket.seq.
 
+deliver_sockets(S) ->
+  [ Sock || Sock <- S#state.sockets,
+            Sock#socket.rcvd /= Sock#socket.seq ].
+
 deliver_pre(S) ->
-  [] /= S#state.sockets.
+  [] /= deliver_sockets(S).
 
 deliver_args(S) ->
-  ?LET(Sock, elements(S#state.sockets),
+  ?LET(Sock, elements(deliver_sockets(S)),
        [Sock#socket.id]).
 
 deliver_pre(S, [Id]) ->
-  Sock = get_socket(S, Id),
-  is_record(Sock, socket) andalso
-  Sock#socket.rcvd /= Sock#socket.seq.
+  lists:member(get_socket(S, Id), deliver_sockets(S)).
 
 deliver(_) -> timer:sleep(1).
 
 deliver_callouts(S, [Id]) ->
   Sock = get_socket(S, Id),
   ?SET(Id, rcvd, Sock#socket.seq).
-
-deliver_features(S, [Id], _) ->
-  [ {Id, [Sock#socket.tcp_state || Sock <- S#state.sockets ]} ].
 
 %% -- Local operations -------------------------------------------------------
 
@@ -676,7 +675,6 @@ counter('_') -> '_'.
 %% invariant(_S) ->
 %% true.
 
-weight(_S, send) -> 1;
 weight(_S, _Cmd) -> 1.
 
 prop_encode_decode() ->
@@ -729,7 +727,9 @@ prop_tcp() ->
       measure(length, commands_length(Cmds),
       aggregate(TcpStates,
       aggregate(adjacent(TcpStates),
-      aggregate(call_features(H),
+      aggregate([ Sock#socket.tcp_state
+                  || Hist <- H, 
+                     Sock <- (eqc_statem:history_state(Hist))#state.sockets ],
       eqc_component:pretty_commands(?MODULE, Cmds, {H, S, Res},
         Res == ok))))))
   end))))).
