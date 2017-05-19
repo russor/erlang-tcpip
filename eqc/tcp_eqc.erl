@@ -166,7 +166,7 @@ open_callouts(_S, [RemoteIp, RemotePort]) ->
 listen_args(_) ->
   [port()].
 
-listen_pre(S, [Port]) ->
+listen_dynamicpre(S, [Port]) ->
   not lists:keymember(Port, #socket.port, S#state.sockets).
 
 listen(Port) ->
