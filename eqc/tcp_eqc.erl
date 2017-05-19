@@ -575,6 +575,9 @@ spawn_socket_return(_, [], Meta) ->
 reset_next(S, _, [Id]) ->
   S#state{sockets = lists:keydelete(Id, #socket.id, S#state.sockets)}.
 
+reset_features(S, [Id], _) ->
+  [ {(get_socket(S, Id))#socket.tcp_state, '->', closed} ].
+
 sent_syn_callouts(_, [Id]) ->
   ?MATCH(Packet, ?APPLY(sent, [Id])),
   Port = {call, erlang, element, [#pkt.sport, Packet]},
@@ -621,6 +624,10 @@ unblock_close_callouts(S, [Id]) ->
 set_next(S, _, [Id, Key, Value]) ->
   Sock = get_socket(S, Id),
   set_socket(S, Id, setelement(Key, Sock, Value)).
+
+set_features(S, [Id, Key, Value], _) ->
+  [ {(get_socket(S, Id))#socket.tcp_state, '->', Value}
+    || Key == #socket.tcp_state ].
 
 inc_next(S, _, [Id, Key]) ->
   Sock = get_socket(S, Id),
@@ -719,16 +726,19 @@ prop_tcp() ->
     checksum:start(),
     {H, S, Res} = run_commands(Cmds),
     cleanup(),
-    TcpStates = [ TcpS || #socket{tcp_state = TcpS} <- lists:map(fun eqc_statem:history_state/1, H) ++ [S] ],
+    TcpStates =
+      [ TcpS || E <- H,
+                {set, _, Call} <- [eqc_statem:history_command(E)],
+                element(2, Call) == tcp_eqc,
+                #socket{tcp_state = TcpS} <- (eqc_statem:history_state(E))#state.sockets ] ++
+      [ TcpS || #socket{tcp_state = TcpS} <- S#state.sockets,
+                element(2, element(3, lists:last(Cmds))) == tcp_eqc ],
     check_command_names(Cmds,
       measure(length, commands_length(Cmds),
-      aggregate(TcpStates,
-      aggregate(adjacent(TcpStates),
-      aggregate([ Sock#socket.tcp_state
-                  || Hist <- H, 
-                     Sock <- (eqc_statem:history_state(Hist))#state.sockets ],
+      aggregate(with_title(tcp_states), TcpStates,
+      aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
       eqc_component:pretty_commands(?MODULE, Cmds, {H, S, Res},
-        Res == ok))))))
+        Res == ok)))))
   end))))).
 
 cleanup() -> cleanup([]).
