@@ -708,7 +708,11 @@ counter('_') -> '_'.
 invariant(S) ->
   [] /= command_list(S).
 
-weight(_S, _Cmd) -> 1.
+weight(_S, listen)  -> 1;
+weight(_S, open)    -> 1;
+weight(_S, close)   -> 2;
+weight(_S, deliver) -> 10;
+weight(_S, _Cmd)    -> 3.
 
 prop_encode_decode() ->
   ?FORALL({SrcIp, DstIp, Packet}, {ip(), ip(), packet()},
