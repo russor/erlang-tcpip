@@ -65,13 +65,14 @@
 initial_state() ->
   #state{}.
 
-in_tcp_state(S, Id, TcpStates) when is_list(TcpStates) ->
-  case get_socket(S, Id) of
-    #socket{ tcp_state = St } -> lists:member(St, TcpStates);
-    false -> false
-  end;
-in_tcp_state(Ss, Id, TcpState) ->
-  in_tcp_state(Ss, Id, [TcpState]).
+in_tcp_state(Sock, TcpState) when not is_list(TcpState) ->
+  in_tcp_state(Sock, [TcpState]);
+in_tcp_state(#socket{tcp_state = St}, TcpStates) ->
+  lists:member(St, TcpStates);
+in_tcp_state(_, _) -> false.
+
+in_tcp_state(S, Id, TcpStates) ->
+  in_tcp_state(get_socket(S, Id), TcpStates).
 
 sockets_in_state(S, TcpStates) when is_list(TcpStates) ->
   [ Sock || Sock <- S#state.sockets,
@@ -246,7 +247,7 @@ close_pre(S, [Socket, Id]) ->
     Sock = #socket{} ->
       Sock#socket.socket == Socket andalso
       Socket /= undefined andalso
-      in_tcp_state(S, Id, close_states());
+      in_tcp_state(Sock, close_states());
     _ ->
       false
   end.
@@ -361,7 +362,7 @@ syn_ack_args(S) ->
 syn_ack_pre(S, [Ip, Port, RIp, RPort, _, Seq, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{} ->
-      in_tcp_state(S, Id, syn_sent) andalso
+      in_tcp_state(Sock, syn_sent) andalso
         Sock#socket.rcvd == Sock#socket.seq andalso
         Ip    == Sock#socket.ip    andalso
         Port  == Sock#socket.port  andalso
@@ -416,7 +417,7 @@ ack_args(S) ->
 ack_pre(S, [Ip,  Port, RIp, RPort, Seq, Ack, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{} ->
-      in_tcp_state(S, Id, ack_states()) andalso
+      in_tcp_state(Sock, ack_states()) andalso
         Sock#socket.seq == Sock#socket.rcvd andalso
         Ip    == Sock#socket.ip    andalso
         Port  == Sock#socket.port  andalso
