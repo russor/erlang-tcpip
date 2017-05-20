@@ -140,6 +140,9 @@ start_next(S, _, [Ip]) ->
 
 %% --- open (connect) ---
 
+open_pre(S) ->
+  length(S#state.sockets) < ?MAX_SOCKETS.
+
 open_args(_) ->
   [ip(), port()].
 
@@ -164,6 +167,9 @@ open_callouts(_S, [RemoteIp, RemotePort]) ->
   ?SET(Id, tcp_state, established).
 
 %% --- listen ---
+
+listen_pre(S) ->
+  length(S#state.sockets) < ?MAX_SOCKETS.
 
 listen_args(_) ->
   [port()].
@@ -235,17 +241,20 @@ accept_process(_S, [_Socket, _]) ->
 close_states() ->
   [established, close_wait, listen].
 
+close_sockets(S) ->
+  [ Sock || Sock <- sockets_in_state(S, close_states()),
+            Sock#socket.socket /= undefined ].
+
 close_pre(S) ->
-  [] /= sockets_in_state(S, close_states()).
+  [] /= close_sockets(S).
 
 close_args(S) ->
-  ?LET(Sock, elements(sockets_in_state(S, close_states())),
+  ?LET(Sock, elements(close_sockets(S)),
        [Sock#socket.socket, Sock#socket.id]).
 
 close_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
-    Sock = #socket{} ->
-      Sock#socket.socket == Socket andalso
+    Sock = #socket{socket = Socket} ->
       Socket /= undefined andalso
       in_tcp_state(Sock, close_states());
     _ ->
@@ -301,15 +310,17 @@ do_close_callouts(S, [Id]) ->
 
 %% --- syn ---
 
-%% syn_pre(S) ->
-%%   in_tcp_state(S, listen).
-
 syn_pre(S) ->
+  length(S#state.sockets) < ?MAX_SOCKETS andalso
   [] /= sockets_in_state(S, listen).
 
 syn_args(S) ->
   ?LET(Sock, elements(sockets_in_state(S, listen)),
        [Sock#socket.ip, Sock#socket.port, ip(), port(), uint32(), Sock#socket.id]).
+
+syn_pre(S, Args = [_, _, _, _, _, Id]) ->
+  in_tcp_state(S, Id, listen) andalso
+  syn_adapt(S, Args) == Args.
 
 syn(Ip, Port, RemoteIp, RemotePort, RemoteSeq, _Id) ->
   Packet =
@@ -320,10 +331,6 @@ syn(Ip, Port, RemoteIp, RemotePort, RemoteSeq, _Id) ->
   Data = encode(RemoteIp, Ip, Packet),
   inject(RemoteIp, Ip, Data),
   ok.
-
-syn_pre(S, Args = [_, _, _, _, _, Id]) ->
-  in_tcp_state(S, Id, listen) andalso
-  syn_adapt(S, Args) == Args.
 
 syn_adapt(S, [_, _, Ip, Port, Seq, Id]) ->
   case get_socket(S, Id) of
@@ -403,11 +410,15 @@ syn_ack_callouts(_S, [_Ip, _Port, _RemoteIp, _RemotePort, Seq, _Ack, Id]) ->
 ack_states() ->
   [syn_rcvd, last_ack, fin_wait_1, closing].
 
+ack_sockets(S) ->
+  [ Sock || Sock <- sockets_in_state(S, ack_states()),
+            Sock#socket.seq == Sock#socket.rcvd ].
+
 ack_pre(S) ->
-  [] /= sockets_in_state(S, ack_states()).
+  [] /= ack_sockets(S).
 
 ack_args(S) ->
-  ?LET(Sock, elements(sockets_in_state(S, ack_states())),
+  ?LET(Sock, elements(ack_sockets(S)),
        [Sock#socket.ip, Sock#socket.port,
         Sock#socket.rip,
         Sock#socket.rport,
@@ -492,7 +503,7 @@ fin_args(S) ->
 
 fin_pre(S, Args = [_Ip, _Port, _RIp, _RPort, _Seq, _Ack, Id]) ->
   in_tcp_state(S, Id, fin_states()) andalso
-    fin_adapt(S, Args) == Args.
+  fin_adapt(S, Args) == Args.
 
 fin_adapt(S, [_, _, _, _, _, _, Id]) ->
   case get_socket(S, Id) of
@@ -536,9 +547,6 @@ fin_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _, Id]) ->
   end.
 
 %% --- deliver ---
-
-%% deliver_pre(S) ->
-%%   S#socket.rcvd /= S#socket.seq.
 
 deliver_sockets(S) ->
   [ Sock || Sock <- S#state.sockets,
