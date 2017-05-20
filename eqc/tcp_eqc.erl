@@ -568,6 +568,25 @@ deliver_callouts(S, [Id]) ->
   Sock = get_socket(S, Id),
   ?SET(Id, rcvd, Sock#socket.seq).
 
+%% --- timeout ---
+
+timeout_pre(S) ->
+  [] /= sockets_in_state(S, time_wait).
+
+timeout_args(S) ->
+  ?LET(Sock, elements(sockets_in_state(S, time_wait)),
+    [Sock#socket.id]).
+
+timeout_pre(S, [Id]) ->
+  in_tcp_state(S, Id, time_wait).
+
+timeout(_) -> timer:sleep(1).
+
+%% TODO: Not sure if this is really ok. Check the spec to see how the TIME_WAIT
+%% state really works.
+timeout_callouts(_, [Id]) ->
+  ?APPLY(reset, [Id]).
+
 %% -- Local operations -------------------------------------------------------
 
 spawn_socket_pre(S, _) ->
@@ -685,8 +704,9 @@ counter({Init, Offs}) -> Init + Offs;
 counter('_') -> '_'.
 
 %% -- Property ---------------------------------------------------------------
-%% invariant(_S) ->
-%% true.
+
+invariant(S) ->
+  [] /= command_list(S).
 
 weight(_S, _Cmd) -> 1.
 
