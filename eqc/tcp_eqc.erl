@@ -89,7 +89,7 @@ set_socket(S, Id, Sock) ->
 
 %% -- Generators ------------------------------------------------------------
 
-ip()   -> ?LET(Ip, uint32(), return(int2ip(Ip))).
+ip()   -> ?LET(Ip, noshrink(uint32()), return(int2ip(Ip))).
 port() -> noshrink(uint16()).
 
 uint8()  -> choose(0, 16#ff).
