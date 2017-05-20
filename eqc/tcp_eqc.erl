@@ -726,19 +726,11 @@ prop_tcp() ->
     checksum:start(),
     {H, S, Res} = run_commands(Cmds),
     cleanup(),
-    TcpStates =
-      [ TcpS || E <- H,
-                {set, _, Call} <- [eqc_statem:history_command(E)],
-                element(2, Call) == tcp_eqc,
-                #socket{tcp_state = TcpS} <- (eqc_statem:history_state(E))#state.sockets ] ++
-      [ TcpS || #socket{tcp_state = TcpS} <- S#state.sockets,
-                element(2, element(3, lists:last(Cmds))) == tcp_eqc ],
     check_command_names(Cmds,
       measure(length, commands_length(Cmds),
-      aggregate(with_title(tcp_states), TcpStates,
       aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
       eqc_component:pretty_commands(?MODULE, Cmds, {H, S, Res},
-        Res == ok)))))
+        Res == ok))))
   end))))).
 
 cleanup() -> cleanup([]).
