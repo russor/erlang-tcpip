@@ -26,7 +26,17 @@
 
 -import(eqc_statem, [tag/2, conj/1]).
 
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
+
+-ifdef(PULSE).
+-compile({parse_transform, pulse_instrument}).
+-compile({pulse_skip, [sleep/1]}).
+-define(COMPONENT, pulse_component).
+-define(MOCKING, pulse_mocking).
+-else.
+-define(COMPONENT, eqc_component).
+-define(MOCKING, eqc_mocking).
+-endif.
 
 %% NOTES
 %%
@@ -757,25 +767,51 @@ prop_checksum() ->
 adjacent([X, Y | Xs]) -> [{X, Y} || X /= Y] ++ adjacent([Y | Xs]);
 adjacent(_) -> [].
 
+sleep(N) ->
+  timer:sleep(N).
+
+-ifdef(PULSE).
+run_test(Seed, Cmds) ->
+  HSRFun = pulse:run(fun() ->
+    ?MOCKING:start_mocking(api_spec()),
+    error_logger:tty(false),
+    cleanup(),
+    checksum:start(),
+    HSR = ?COMPONENT:run_commands(Cmds, [{command_timeout, 300000}]),
+    cleanup(),
+    ?MOCKING:stop_mocking(),
+    fun() -> HSR end    %% return a function to make trace less verbose
+  end, [{seed, Seed}, single_mailbox, {strategy, unfair}]),
+  [ sleep(100) || Res /= ok ],  %% to avoid interleaving pulse trace and pretty_commands
+  HSR = {H, _S, Res} = HSRFun(),
+  check_command_names(Cmds,
+    measure(length, commands_length(Cmds),
+    aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
+    eqc_component:pretty_commands(?MODULE, Cmds, HSR,
+      Res == ok)))).
+-else.
+run_test(_Seed, Cmds) ->
+  ?MOCKING:start_mocking(api_spec()),
+  error_logger:tty(false),
+  cleanup(),
+  checksum:start(),
+  {H, S, Res} = ?COMPONENT:run_commands(Cmds),
+  cleanup(),
+  check_command_names(Cmds,
+    measure(length, commands_length(Cmds),
+    aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
+    eqc_component:pretty_commands(?MODULE, Cmds, {H, S, Res},
+      Res == ok)))).
+-endif.
+
 prop_tcp() ->
   eqc_statem:show_states(
   eqc:dont_print_counterexample(
   with_parameter(default_process, worker,
   with_parameter(color, true,
-  ?FORALL(Cmds, commands(?MODULE),
-  begin
-    eqc_mocking:start_mocking(api_spec()),
-    error_logger:tty(false),
-    cleanup(),
-    checksum:start(),
-    {H, S, Res} = run_commands(Cmds),
-    cleanup(),
-    check_command_names(Cmds,
-      measure(length, commands_length(Cmds),
-      aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
-      eqc_component:pretty_commands(?MODULE, Cmds, {H, S, Res},
-        Res == ok))))
-  end))))).
+  ?FORALL(Seed, ?LAZY(os:timestamp()),
+  ?FORALL(Cmds, ?COMPONENT:commands(?MODULE),
+    run_test(Seed, Cmds))))))).
 
 cleanup() -> cleanup([]).
 cleanup(_Sockets) ->
@@ -807,10 +843,11 @@ cover(Prop) ->
   Res.
 
 %% -- API-spec ---------------------------------------------------------------
+
 api_spec() ->
   #api_spec{
      language = erlang,
-     mocking = eqc_mocking,
+     mocking = ?MOCKING,
      modules =
        [ #api_module{
             name = ip, fallback = ?MODULE,
