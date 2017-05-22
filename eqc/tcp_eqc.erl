@@ -237,11 +237,6 @@ accept_process(_S, [_Socket, _]) ->
   spawn.
 
 %% --- close ---
-child_in(S, Id, TcpState) ->
-  Children = 
-    [ Sock#socket.tcp_state || Sock<-S#state.sockets,
-                               Sock#socket.parent == Id],
-  lists:member(TcpState, Children).
 
 close_states() ->
   [established, close_wait, listen].
@@ -261,8 +256,7 @@ close_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{socket = Socket} ->
       Socket /= undefined andalso
-      in_tcp_state(Sock, close_states()) andalso
-         not child_in(S, Id, syn_rcvd);  %% BUG precondition
+      in_tcp_state(Sock, close_states());
     _ ->
       false
   end.
@@ -287,9 +281,12 @@ close_callouts(S, [_, Id]) ->
   case Sock#socket.socket_type of
     listen ->
       ?PAR([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.blocked ] ++
-           [ ?APPLY(do_close, [Child#socket.id]) ||
-             Child <- S#state.sockets, Child#socket.parent == Id,
-             Child#socket.socket == undefined ]),
+           %% BUG: only sends FIN to connections in the accept_queue
+           [ ?APPLY(do_close, [Child]) || Child <- Sock#socket.accept_queue ]),
+           %% Should be this:
+           %% [ ?APPLY(do_close, [Child#socket.id]) ||
+           %%   Child <- S#state.sockets, Child#socket.parent == Id,
+           %%   Child#socket.socket == undefined ]))),
       ?APPLY(reset, [Id]);
     _ ->
       ?APPLY(do_close, [Id]),
@@ -714,6 +711,8 @@ counter(N) when is_integer(N) -> N;
 counter({Init, Offs}) -> Init + Offs;
 counter('_') -> '_'.
 
+take(N, Xs) -> lists:sublist(Xs, 1, N).
+
 %% -- Property ---------------------------------------------------------------
 
 invariant(S) ->
@@ -723,6 +722,7 @@ weight(_S, listen)  -> 1;
 weight(_S, open)    -> 1;
 weight(_S, close)   -> 2;
 weight(_S, deliver) -> 10;
+weight(_S, fin)     -> 1;
 weight(_S, _Cmd)    -> 3.
 
 prop_encode_decode() ->
