@@ -59,6 +59,38 @@
 %%    Internal state change message leaks to application process. Ignore it in
 %%    the model for now (by running usr_close() in a fresh process).
 %%
+%%  RACE CONDITION 5
+%%
+%%    Race condition between ACK and usr_accept(), resulting in dropped connection
+%%    and leaking internal {open_con, _} message.
+%%
+%%    Involved actors
+%%      ListenSocket
+%%      Connection1: established, in open_queue
+%%      Connection2: in syn_rcvd
+%%      User
+%%
+%%    User
+%%      usr_accept()
+%%        ListenSocket ! {subscribe, listener_queue, User}
+%%
+%%    ListenSocket
+%%      receive {subscribe, listener_queue, User}
+%%      pop Connection1 from open_queue
+%%      User ! {open_con, Connection1}
+%%
+%%    Connection2
+%%      receive ACK
+%%      ListenSocket ! {state, established, Connection2}
+%%
+%%    ListenSocket
+%%      receive {state, established, Connection2}
+%%      pop User form listener_queue      %% second open_con message to User
+%%      User ! {open_con, Connection2}    %% causing Connection2 to be dropped
+%%
+%%    User
+%%      receive {open_con, Connection1}
+%%      ListenSocket ! {unsubscribe, listener_queue}  %% unsubscribing too late
 
 %% -- State ------------------------------------------------------------------
 
