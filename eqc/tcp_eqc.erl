@@ -54,11 +54,14 @@
 
 -define(SET(Id, Key, Value), ?APPLY(set, [Id, #socket.Key, Value])).
 -define(INC(Id, Key),        ?APPLY(inc, [Id, #socket.Key])).
+-define(UPD(Id, Key, Pat, Body),
+  ?APPLY(upd, [Id, #socket.Key, fun(Pat) -> Body end])).
 
 -define(MAX_SOCKETS, 5).
 
 -record(socket,{tcp_state = undefined, ip, port, rip, rport, socket,
-               socket_type, seq, rcvd, rseq, id, parent, blocked = []}).
+               socket_type, seq, rcvd, rseq, id, parent, blocked = [],
+               accept_queue = []}).
 
 -record(state, {ip, sockets = []}).
 
@@ -219,15 +222,12 @@ accept(Socket, _) ->
   end.
 
 accept_callouts(S, [_Socket, Id]) ->
-  case [ Sock || Sock <- S#state.sockets,
-                 Sock#socket.parent == Id,
-                 lists:member(Sock#socket.tcp_state, [established, close_wait]),
-                 Sock#socket.socket == undefined ] of
-    [Sock | _] ->
-      NewId = Sock#socket.id,
+  Sock = get_socket(S, Id),
+  case Sock#socket.accept_queue of
+    [NewId | _] ->
+      ?UPD(Id, accept_queue, [_ | Q], Q),
       ?APPLY(set_socket, [NewId]);
     [] ->
-      Sock = get_socket(S, Id),
       ?SET(Id, blocked, Sock#socket.blocked ++ [?SELF]),
       ?MATCH(NewId, ?BLOCK({accept, ?SELF})),
       ?WHEN(NewId /= closed, ?APPLY(set_socket, [NewId]))
@@ -479,9 +479,8 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
         #socket{blocked = [Pid | Pids]} ->
           ?UNBLOCK({accept, Pid}, Id),
           ?SET(P, blocked, Pids);
-        false -> %% parent closed, we need to send FIN (patch against impl).
-          ?APPLY(do_close, [Id]);
-        _ -> ?EMPTY
+        false -> ?EMPTY;
+        _     -> ?UPD(P, accept_queue, Q, Q ++ [Id])
       end;
     fin_wait_1 ->
       ?SET(Id, tcp_state, fin_wait_2);
@@ -657,6 +656,9 @@ unblock_close_callouts(S, [Id]) ->
   Sock = get_socket(S, Id),
   ?PAR([ ?UNBLOCK({close, Pid}, ok) || Pid <- Sock#socket.blocked ]).
 
+upd_next(S, _, [Id, Key, Fun]) ->
+  Sock = get_socket(S, Id),
+  set_socket(S, Id, setelement(Key, Sock, Fun(element(Key, Sock)))).
 
 set_next(S, _, [Id, Key, Value]) ->
   Sock = get_socket(S, Id),
