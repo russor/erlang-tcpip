@@ -85,7 +85,7 @@
 %%
 %%    ListenSocket
 %%      receive {state, established, Connection2}
-%%      pop User form listener_queue      %% second open_con message to User
+%%      pop User from listener_queue      %% second open_con message to User
 %%      User ! {open_con, Connection2}    %% causing Connection2 to be dropped
 %%
 %%    User
