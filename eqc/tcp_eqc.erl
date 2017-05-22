@@ -814,8 +814,8 @@ run_test(Seed, Cmds) ->
     ?MOCKING:stop_mocking(),
     fun() -> HSR end    %% return a function to make trace less verbose
   end, [{seed, Seed}, single_mailbox, {strategy, unfair}]),
-  [ sleep(100) || Res /= ok ],  %% to avoid interleaving pulse trace and pretty_commands
   HSR = {H, _S, Res} = HSRFun(),
+  [ sleep(100) || Res /= ok ],  %% to avoid interleaving pulse trace and pretty_commands
   check_command_names(Cmds,
     measure(length, commands_length(Cmds),
     aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
