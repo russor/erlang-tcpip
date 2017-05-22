@@ -230,6 +230,11 @@ accept_process(_S, [_Socket, _]) ->
   spawn.
 
 %% --- close ---
+child_in(S, Id, TcpState) ->
+  Children = 
+    [ Sock#socket.tcp_state || Sock<-S#state.sockets,
+                               Sock#socket.parent == Id],
+  lists:member(TcpState, Children).
 
 close_states() ->
   [established, close_wait, listen].
@@ -246,7 +251,8 @@ close_pre(S, [Socket, Id]) ->
     Sock = #socket{} ->
       Sock#socket.socket == Socket andalso
       Socket /= undefined andalso
-      in_tcp_state(S, Id, close_states());
+      in_tcp_state(S, Id, close_states()) andalso
+         not child_in(S, Id, syn_rcvd);  %% BUG precondition
     _ ->
       false
   end.
@@ -461,8 +467,8 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
         #socket{blocked = [Pid | Pids]} ->
           ?UNBLOCK({accept, Pid}, Id),
           ?SET(P, blocked, Pids);
-        %% false -> %% parent closed, we need to send FIN (patch against impl).
-        %%   ?APPLY(do_close, [Id]);
+        false -> %% parent closed, we need to send FIN (patch against impl).
+          ?APPLY(do_close, [Id]);
         _ -> ?EMPTY
       end;
     fin_wait_1 ->
