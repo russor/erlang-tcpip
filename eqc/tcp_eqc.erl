@@ -607,7 +607,10 @@ sent_syn_ack_callouts(S, [Id]) ->
 
 sent_callouts(S, [Id]) ->
   Sock = get_socket(S, Id),
-  ?MATCH({Packet, ok}, ?CALLOUT(ip, send_pkt, [?VAR, Sock#socket.rip], ok)),
+  PortMatch = if Sock#socket.rport /= undefined -> Sock#socket.rport;
+                 true -> ?WILDCARD
+              end,
+  ?MATCH({Packet, ok}, ?CALLOUT(ip, send_pkt, [?VAR, Sock#socket.rip, PortMatch], ok)),
   ?ASSERT(?MODULE, verify_checksum, [Sock#socket.ip, Sock#socket.rip, Packet]),
   ?ASSERT(?MODULE, check_ports,     [Sock#socket.port, Sock#socket.rport, Packet]),
   ?RET(Packet).
@@ -772,7 +775,7 @@ api_spec() ->
        [ #api_module{
             name = ip, fallback = ?MODULE,
             functions =
-              [ #api_fun{ name = send_pkt, arity = 2 }] },
+              [ #api_fun{ name = send_pkt, arity = 3 }] },
          #api_module{
             name = mock,
             functions =
@@ -785,5 +788,6 @@ send(Data, Size, Prot, DstIp) when is_list(Data) ->
   send(list_to_binary(Data), Size, Prot, DstIp);
 send(Data, Size, _, _) when size(Data) /= Size -> ip:packet_size_mismatch(Data, size(Data), Size);
 send(Data, _Size, tcp, DstIp) ->
-  ip:send_pkt(tcp_pkt:decode(Data), int2ip(DstIp)).
+  DecodedData = #pkt{dport = DPort} =  tcp_pkt:decode(Data),
+  ip:send_pkt(DecodedData, int2ip(DstIp), DPort).
 
