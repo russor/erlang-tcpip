@@ -202,7 +202,7 @@ open_callouts(_S, [RemoteIp, RemotePort]) ->
   ?MATCH(Id, ?APPLY(spawn_socket, [])),
   ?SET(Id, rip,   RemoteIp),
   ?SET(Id, rport, RemotePort),
-  ?MATCH(Port, ?APPLY(sent_syn, [Id])),
+  ?MATCH(Port, ?APPLY(send_syn, [Id])),
   ?SET(Id, tcp_state, syn_sent),
   ?SET(Id, socket_type, connect),
   ?SET(Id, port, Port),
@@ -211,7 +211,7 @@ open_callouts(_S, [RemoteIp, RemotePort]) ->
        , ?APPLY(sent_ack, [Id]) ]),
   ?SET(Id, tcp_state, established).
 
-%% --- listen ---
+%% --- listen (passive open) ---
 
 listen_pre(S) ->
   length(S#state.sockets) < ?MAX_SOCKETS.
@@ -396,7 +396,7 @@ syn_callouts(_S, [_Ip,  Port, RemoteIp, RemotePort, RemoteSeq, Id]) ->
   ?SET(NewId, rseq,   {RemoteSeq, 1}),
   ?SET(NewId, socket_type, accept),
   ?SET(NewId, parent, Id),
-  ?APPLY(sent_syn_ack, [NewId]),
+  ?APPLY(send_syn_ack, [NewId]),
   ?SET(NewId, tcp_state, syn_rcvd).
 
 
@@ -653,7 +653,7 @@ reset_next(S, _, [Id]) ->
 reset_features(S, [Id], _) ->
   [ {(get_socket(S, Id))#socket.tcp_state, '->', closed} ].
 
-sent_syn_callouts(_, [Id]) ->
+send_syn_callouts(_, [Id]) ->
   ?MATCH(Packet, ?APPLY(sent, [Id])),
   Port = {call, erlang, element, [#pkt.sport, Packet]},
   ?ASSERT(?MODULE, check_packet, [Packet, '_', '_', [syn]]),
@@ -673,7 +673,7 @@ sent_fin_callouts(S, [Id]) ->
   ?INC(Id, seq),
   ?RET(ok).
 
-sent_syn_ack_callouts(S, [Id]) ->
+send_syn_ack_callouts(S, [Id]) ->
   Sock = get_socket(S, Id),
   ?MATCH(Packet, ?APPLY(sent, [Id])),
   ?ASSERT(?MODULE, check_packet, [Packet, '_', Sock#socket.rseq, [ack, syn]]),
