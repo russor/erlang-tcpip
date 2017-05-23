@@ -281,7 +281,7 @@ accept_process(_S, [_Socket, _]) ->
 %% --- close ---
 
 close_states() ->
-  [established, close_wait, listen].
+  [established, close_wait, listen].  %% Why not syn_rcvd or syn_sent??
 
 close_sockets(S) ->
   [ Sock || Sock <- sockets_in_state(S, close_states()),
@@ -328,7 +328,7 @@ close_callouts(S, [_, Id]) ->
            %% Should be this:
            %% [ ?APPLY(do_close, [Child#socket.id]) ||
            %%   Child <- S#state.sockets, Child#socket.parent == Id,
-           %%   Child#socket.socket == undefined ]))),
+           %%   Child#socket.socket == undefined ]),
       ?APPLY(reset, [Id]);
     _ ->
       ?APPLY(do_close, [Id]),
