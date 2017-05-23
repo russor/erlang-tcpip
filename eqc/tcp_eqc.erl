@@ -347,6 +347,9 @@ do_close_callouts(S, [Id]) ->
     established ->
       ?APPLY(sent_fin, [Id]),
       ?SET(Id, tcp_state, fin_wait_1);
+    syn_rcvd ->
+      ?APPLY(sent_fin, [Id]),
+      ?SET(Id, tcp_state, fin_wait_1);
     _ ->
       ?EMPTY
   end.
