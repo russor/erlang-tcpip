@@ -294,7 +294,6 @@ accept(Tcb) ->
             %% Listen socket was closed...
             closed;
         {open_con, Socket} ->
-            tcb:unsubscribe(Tcb, listener_queue),
             {Other_Tcb, _, _} = Socket,
             link(Other_Tcb),
             Socket

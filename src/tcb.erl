@@ -475,7 +475,7 @@ add(listener_queue, From, Tcb, Observers) ->
             {Tcb, New_Observers};
 	{{value, Socket}, Q2} ->
 	    From ! {open_con, Socket},
-	    {Tcb#tcb{open_queue = Q2}, New_Observers}
+	    {Tcb#tcb{open_queue = Q2}, Observers}
     end.
 
 remove(rdata, _, Observers) ->
