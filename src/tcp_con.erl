@@ -172,23 +172,23 @@ writer_loop(Tcb, State, Data_Avail) ->
     receive
 	{state, New_State} ->
 	    writer_loop(Tcb, New_State, Data_Avail)
-    after 0 -> ok
-    end,
-    {Timeout, Def_Msg} = check_send(Tcb, State, Data_Avail),
-    receive
-	{state, N_State} ->
-	    writer_loop(Tcb, N_State, Data_Avail);
-	{'EXIT', normal} ->
-	    ok;
-	close ->
-	    ok;
-	{event, Message} ->
-	    New_Data_Avail = procces_msg(Tcb, State, Message),
-	    writer_loop(Tcb, State, New_Data_Avail)
-    after
-	Timeout ->
-	    New_Data_Avail = procces_msg(Tcb, State, {send, Def_Msg}),
-	    writer_loop(Tcb, State, New_Data_Avail)
+    after 0 ->
+            {Timeout, Def_Msg} = check_send(Tcb, State, Data_Avail),
+            receive
+                {'EXIT', normal} ->
+                    ok;
+                close ->
+                    ok;
+                {state, N_State} ->
+                    writer_loop(Tcb, N_State, Data_Avail);
+                {event, Message} ->
+                    New_Data_Avail = procces_msg(Tcb, State, Message),
+                    writer_loop(Tcb, State, New_Data_Avail)
+            after
+                Timeout ->
+                    New_Data_Avail = procces_msg(Tcb, State, {send, Def_Msg}),
+                    writer_loop(Tcb, State, New_Data_Avail)
+            end
     end.
 
 procces_msg(Tcb, State, Event) ->
@@ -285,7 +285,13 @@ read(Tcb, Bytes) ->
 
 close(Tcb, Writer) ->
     tcp_con:send_packet(Writer, fin),
-    wait_state(Tcb, [time_wait, closed]).
+    wait_state(Tcb, [time_wait, closed]),
+    receive
+        {state, closed, _} ->
+            ok
+    after 2000 ->
+            throw(timeout)
+    end.
 
 accept(Tcb) ->
     tcb:subscribe(Tcb, listener_queue),
