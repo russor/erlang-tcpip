@@ -48,8 +48,9 @@ badack_action(_, _, Writer) ->
     tcp_con:send_packet(Writer, rst). % It should send the data from the packet. TODO
 
 nonewdata_action(_, _, Writer) -> % Idem
-    tcp_con:send_packet(Writer, rst),
-    {error, badack}.
+    %% tcp_con:send_packet(Writer, rst),
+    %% {error, badack}.
+    ok.
 
 newdata_action(Tcb, _, _) ->
     tcb:syncset_tcbdata(Tcb, state, established).
