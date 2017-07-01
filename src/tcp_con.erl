@@ -231,15 +231,26 @@ check_send(Tcb, State, Data_Avail) ->
 
 wait_state(Tcb, State_List) ->
     tcb:subscribe(Tcb, state),
-    wait_state_1(State_List),
-    tcb:unsubscribe(Tcb, state).
+    case wait_state_1(State_List) of
+        {ok, closed} ->
+            receive
+                {state, closed, _} ->
+                    ok
+            after 2000 ->
+                    throw(timeout)
+            end,
+            ok;
+        _ ->
+            tcb:unsubscribe(Tcb, state),
+            ok
+    end.
 
 wait_state_1(State_List) ->
     receive
 	{state, State, _Who} ->
 	    case lists:member(State, State_List) of
 		true ->
-		    ok;
+                    {ok, State};
 		false ->
 		    wait_state_1(State_List)
 	    end
@@ -285,13 +296,7 @@ read(Tcb, Bytes) ->
 
 close(Tcb, Writer) ->
     tcp_con:send_packet(Writer, fin),
-    wait_state(Tcb, [time_wait, closed]),
-    receive
-        {state, closed, _} ->
-            ok
-    after 2000 ->
-            throw(timeout)
-    end.
+    wait_state(Tcb, [time_wait, closed]).
 
 accept(Tcb) ->
     tcb:subscribe(Tcb, listener_queue),
