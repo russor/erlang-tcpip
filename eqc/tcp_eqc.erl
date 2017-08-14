@@ -302,6 +302,8 @@ close_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{socket = Socket} ->
       Socket /= undefined andalso
+      (Sock#socket.socket_type /= listen orelse S#state.synchronized) andalso
+          %% ^ work-around for bug where only ACK'd connections get a FIN
       in_tcp_state(Sock, close_states());
     _ ->
       false
