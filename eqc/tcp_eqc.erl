@@ -822,7 +822,7 @@ run_test(Seed, Cmds) ->
   check_command_names(Cmds,
     measure(length, commands_length(Cmds),
     aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
-    eqc_component:pretty_commands(?MODULE, Cmds, HSR,
+    ?COMPONENT:pretty_commands(?MODULE, Cmds, HSR,
       Res == ok)))).
 -else.
 run_test(_Seed, Cmds) ->
@@ -835,7 +835,7 @@ run_test(_Seed, Cmds) ->
   check_command_names(Cmds,
     measure(length, commands_length(Cmds),
     aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
-    eqc_component:pretty_commands(?MODULE, Cmds, {H, S, Res},
+    ?COMPONENT:pretty_commands(?MODULE, Cmds, {H, S, Res},
       Res == ok)))).
 -endif.
 
