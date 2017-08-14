@@ -253,7 +253,7 @@ accept_process(_S, [_Socket, _]) ->
 %% --- close ---
 
 close_states() ->
-  [established, close_wait, listen].  %% Why not syn_rcvd or syn_sent??
+  [established, close_wait, listen, syn_sent].
 
 close_sockets(S) ->
   [ Sock || Sock <- sockets_in_state(S, close_states()),
