@@ -40,57 +40,25 @@
 
 %% NOTES
 %%
-%%  RACE CONDITION 1
-%%
-%%    Between accept and ACK. There's a window in tcp_con:accept() between
-%%    tcb:get_tcbdata() and tcb:subscribe() where a connection might be missed.
-%%
-%%  RACE CONDITION 2
-%%
-%%    Call to tcp_con:usr_open(), but no SYN is sent.
-%%
 %%  RACE CONDITION 3
 %%
 %%    Race between incoming and outgoing FIN, causing the call to
 %%    tcp_con:usr_close() to get stuck.
+%%
+%%    See race_condition_3.txt.
 %%
 %%  RACE CONDITION 4
 %%
 %%    Internal state change message leaks to application process. Ignore it in
 %%    the model for now (by running usr_close() in a fresh process).
 %%
-%%  RACE CONDITION 5
+%%  BUG 6: No FIN for accept sockets in SYN_RCVD when closing listen socket.
 %%
-%%    Race condition between ACK and usr_accept(), resulting in dropped connection
-%%    and leaking internal {open_con, _} message.
+%%  BUG 7: ESTABLISHED, but not accepted, connections are closed in sequence.
 %%
-%%    Involved actors
-%%      ListenSocket
-%%      Connection1: established, in open_queue
-%%      Connection2: in syn_rcvd
-%%      User
-%%
-%%    User
-%%      usr_accept()
-%%        ListenSocket ! {subscribe, listener_queue, User}
-%%
-%%    ListenSocket
-%%      receive {subscribe, listener_queue, User}
-%%      pop Connection1 from open_queue
-%%      User ! {open_con, Connection1}
-%%
-%%    Connection2
-%%      receive ACK
-%%      ListenSocket ! {state, established, Connection2}
-%%
-%%    ListenSocket
-%%      receive {state, established, Connection2}
-%%      pop User from listener_queue      %% second open_con message to User
-%%      User ! {open_con, Connection2}    %% causing Connection2 to be dropped
-%%
-%%    User
-%%      receive {open_con, Connection1}
-%%      ListenSocket ! {unsubscribe, listener_queue}  %% unsubscribing too late
+%%    This means that the second connection isn't sent a FIN until after the
+%%    first connection has reached TIME_WAIT. Quick fix in PR#7:
+%%    https://github.com/rickpayne/erlang-tcpip/pull/7/commits/bdaed284257d14d3b2e439cf39ae95bd376de6d4
 
 %% -- State ------------------------------------------------------------------
 
