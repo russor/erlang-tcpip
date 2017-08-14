@@ -105,7 +105,7 @@
                socket_type, seq, rcvd, rseq, id, parent, blocked = [],
                accept_queue = []}).
 
--record(state, {ip, sockets = []}).
+-record(state, {ip, sockets = [], synchronized = true}).
 
 initial_state() ->
   #state{}.
@@ -245,7 +245,10 @@ accept_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{} ->
       Sock#socket.socket == Socket andalso
-      Sock#socket.tcp_state == listen;
+      Sock#socket.tcp_state == listen andalso
+      (Sock#socket.blocked == [] orelse S#state.synchronized);
+        %% ^ Make sure we're synchronized if there are other accept calls
+        %%   so we can predict which one will be unblocked first.
     false -> false
   end.
 
@@ -271,6 +274,7 @@ accept_callouts(S, [_Socket, Id]) ->
       ?APPLY(set_socket, [NewId]);
     [] ->
       ?SET(Id, blocked, Sock#socket.blocked ++ [?SELF]),
+      ?APPLY(set_synchronized, [false]),  %% Avoid nondeterminism from racing accept calls
       ?MATCH(NewId, ?BLOCK({accept, ?SELF})),
       ?WHEN(NewId /= closed, ?APPLY(set_socket, [NewId]))
   end.
@@ -516,6 +520,7 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
   case Sock#socket.tcp_state of
     syn_rcvd ->
       ?SET(Id, tcp_state, established),
+      ?APPLY(set_synchronized, [false]),  %% avoiding race with close()
       P = Sock#socket.parent,
       case get_socket(S, P) of
         #socket{blocked = [Pid | Pids]} ->
@@ -614,6 +619,19 @@ deliver(_) -> timer:sleep(1).
 deliver_callouts(S, [Id]) ->
   Sock = get_socket(S, Id),
   ?SET(Id, rcvd, Sock#socket.seq).
+
+%% --- synchronize ---
+%% We use this to avoid race conditions between consecutive commands.
+
+synchronize_args(_S) -> [].
+
+synchronize() -> timer:sleep(1).
+
+synchronize_callouts(_, _) ->
+  ?APPLY(set_synchronized, [true]).
+
+set_synchronized_next(S, _, [Value]) ->
+  S#state{ synchronized = Value }.
 
 %% --- timeout ---
 
