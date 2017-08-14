@@ -317,12 +317,14 @@ close_adapt(S, [_, Id]) ->
       false
   end.
 
+%% Work around for RACE CONDITION 4
 close(Socket, _) ->
   Root = self(),
-  %% Work around for RACE CONDITION 4
   Pid = spawn(fun() -> Root ! {self(), tcp_con:usr_close(Socket)} end),
   receive {Pid, _Res} -> ok end.
 
+%% To not work around RACE 4:
+%% close(Socket, _) -> tcp_con:usr_close(Socket).
 
 close_callouts(S, [_, Id]) ->
   Sock = get_socket(S, Id),
