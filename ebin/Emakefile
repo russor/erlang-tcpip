@@ -1,0 +1,2 @@
+{"../eqc/tcp_eqc", [{outdir, "../_build/eqc/lib/etcpip/ebin"}, debug_info, {parse_transform, eqc_cover}, {d, 'PULSE'}]}.
+{"../eqc/tcp_pkt", [{outdir, "../_build/eqc/lib/etcpip/ebin"}, debug_info, {parse_transform, eqc_cover}]}.
