@@ -461,10 +461,21 @@ ack_pre(S, [Ip,  Port, RIp, RPort, Seq, Ack, Id]) ->
         RIp   == Sock#socket.rip   andalso
         RPort == Sock#socket.rport andalso
         Seq   == Sock#socket.rseq  andalso
-        Ack   == Sock#socket.seq;
+        Ack   == Sock#socket.seq   andalso
+        sync_ack_in_syn_rcvd(S, Sock);
     _ ->
       false
   end.
+
+%% Avoid race condition between different ACK's in SYN_RCVD to make sure we
+%% can predict which accept gets which connection.
+sync_ack_in_syn_rcvd(S, _) when S#state.synchronized -> true;
+sync_ack_in_syn_rcvd(S, Sock = #socket{ tcp_state = syn_rcvd }) ->
+  case get_socket(S, Sock#socket.parent) of
+    #socket{ accept_queue = Q } -> Q == [];
+    false -> true   %% listen socket is closed, so race doesn't matter
+  end;
+sync_ack_in_syn_rcvd(_, _) -> true.
 
 ack_adapt(S, [_, _, _, _, _, _, Id]) ->
   case get_socket(S, Id) of
@@ -494,7 +505,7 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
   case Sock#socket.tcp_state of
     syn_rcvd ->
       ?SET(Id, tcp_state, established),
-      ?APPLY(set_synchronized, [false]),  %% avoiding race with close()
+      ?APPLY(set_synchronized, [false]),  %% avoiding race with other ACK's (and close() to work around BUG 6)
       P = Sock#socket.parent,
       case get_socket(S, P) of
         #socket{blocked = [Pid | Pids]} ->
