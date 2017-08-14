@@ -54,6 +54,11 @@
 %%    This means that the second connection isn't sent a FIN until after the
 %%    first connection has reached TIME_WAIT. Quick fix in PR#7:
 %%    https://github.com/rickpayne/erlang-tcpip/pull/7/commits/bdaed284257d14d3b2e439cf39ae95bd376de6d4
+%%
+%%  RACE 8: Race between listen:send(_, {send, fin}) and tcp_con:wait_state().
+%%
+%%    It's possible that the Tcb process terminates before we get to
+%%    tcb:subscribe(Tcb, state) in wait_state().
 
 %% -- State ------------------------------------------------------------------
 
