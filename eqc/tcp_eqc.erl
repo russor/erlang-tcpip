@@ -271,7 +271,7 @@ close_pre(S, [Socket, Id]) ->
     Sock = #socket{socket = Socket} ->
       Socket /= undefined andalso
       (Sock#socket.socket_type /= listen orelse S#state.synchronized) andalso
-          %% ^ work-around for bug where only ACK'd connections get a FIN
+          %% ^ work-around for BUG 6: avoid race between ACK and close
       in_tcp_state(Sock, close_states());
     _ ->
       false
@@ -298,9 +298,11 @@ close_callouts(S, [_, Id]) ->
   Sock = get_socket(S, Id),
   case Sock#socket.socket_type of
     listen ->
-      ?PAR([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.blocked ] ++
-           %% BUG: only sends FIN to connections in the accept_queue
-           [ ?APPLY(do_close, [Child]) || Child <- Sock#socket.accept_queue ]),
+      ?SEQ([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.blocked ] ++
+           %% BUG 6: only sends FIN to connections in the accept_queue
+           %% [ ?APPLY(do_close, [Child]) || Child <- Sock#socket.accept_queue ]),
+           %% BUG 7: connections are closed in sequence!
+           [ ?APPLY(close, [unused, Child]) || Child <- Sock#socket.accept_queue ]),
            %% Should be this:
            %% [ ?APPLY(do_close, [Child#socket.id]) ||
            %%   Child <- S#state.sockets, Child#socket.parent == Id,
