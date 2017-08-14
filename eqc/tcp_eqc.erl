@@ -844,9 +844,11 @@ prop_tcp() ->
   eqc:dont_print_counterexample(
   with_parameter(default_process, worker,
   with_parameter(color, true,
-  ?FORALL(Seed, ?LAZY(os:timestamp()),
   ?FORALL(Cmds, ?COMPONENT:commands(?MODULE),
-    run_test(Seed, Cmds))))))).
+  ?LET(Shrinking, parameter(shrinking, false),
+  ?FORALL(Seed, pulse:seed(),
+  ?ALWAYS(if Shrinking -> 1; true -> 1 end,
+    run_test(Seed, Cmds))))))))).
 
 cleanup() -> cleanup([]).
 cleanup(_Sockets) ->
