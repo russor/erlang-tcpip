@@ -38,59 +38,46 @@
 -define(MOCKING, eqc_mocking).
 -endif.
 
+%% Remove these when bugs are fixed!
+-define(BUG6, true).
+-define(BUG7, true).
+
 %% NOTES
-%%
-%%  RACE CONDITION 1
-%%
-%%    Between accept and ACK. There's a window in tcp_con:accept() between
-%%    tcb:get_tcbdata() and tcb:subscribe() where a connection might be missed.
 %%
 %%  RACE CONDITION 2
 %%
 %%    Call to tcp_con:usr_open(), but no SYN is sent.
+%%
+%%    There is a race between the Reader registering with the Tcb and closed:send(syn)
+%%    setting the state to syn_sent. If the state change occurs before the reader is
+%%    registered, the Tcb terminates with badarg trying to notify the undefined
+%%    Tcb#tcb.reader.
 %%
 %%  RACE CONDITION 3
 %%
 %%    Race between incoming and outgoing FIN, causing the call to
 %%    tcp_con:usr_close() to get stuck.
 %%
-%%  RACE CONDITION 4
+%%    See race_condition_3.txt.
 %%
-%%    Internal state change message leaks to application process. Ignore it in
-%%    the model for now (by running usr_close() in a fresh process).
+%%  BUG 6: No FIN for accept sockets in SYN_RCVD when closing listen socket.
 %%
-%%  RACE CONDITION 5
+%%  BUG 7: ESTABLISHED, but not accepted, connections are closed in sequence.
 %%
-%%    Race condition between ACK and usr_accept(), resulting in dropped connection
-%%    and leaking internal {open_con, _} message.
+%%    This means that the second connection isn't sent a FIN until after the
+%%    first connection has reached TIME_WAIT. Quick fix in PR#7:
+%%    https://github.com/rickpayne/erlang-tcpip/pull/7/commits/bdaed284257d14d3b2e439cf39ae95bd376de6d4
 %%
-%%    Involved actors
-%%      ListenSocket
-%%      Connection1: established, in open_queue
-%%      Connection2: in syn_rcvd
-%%      User
+%%  RACE 8: Race between state -> closed and tcp_con:wait_state().
 %%
-%%    User
-%%      usr_accept()
-%%        ListenSocket ! {subscribe, listener_queue, User}
-%%
-%%    ListenSocket
-%%      receive {subscribe, listener_queue, User}
-%%      pop Connection1 from open_queue
-%%      User ! {open_con, Connection1}
-%%
-%%    Connection2
-%%      receive ACK
-%%      ListenSocket ! {state, established, Connection2}
-%%
-%%    ListenSocket
-%%      receive {state, established, Connection2}
-%%      pop User from listener_queue      %% second open_con message to User
-%%      User ! {open_con, Connection2}    %% causing Connection2 to be dropped
-%%
-%%    User
-%%      receive {open_con, Connection1}
-%%      ListenSocket ! {unsubscribe, listener_queue}  %% unsubscribing too late
+%%    When closing a listen socket, the state is set to 'closed' twice: first
+%%    in tcp_con:close_connection() by syncset_tcbdata(), and next in tcb:close().
+%%    The race is between these two state changes and the tcb:subscribe() call
+%%    in tcp_con:wait_state(). Three things can happen:
+%%      - subscribe first: two state change messages as expected by wait_state
+%%      - subscribe in between: one state change message -> throw(timeout)
+%%      - subscribe last: tcp_con:usr_close() never returns
+%%    This is the same problem reported as RACE 4.
 
 %% -- State ------------------------------------------------------------------
 
@@ -105,7 +92,7 @@
                socket_type, seq, rcvd, rseq, id, parent, blocked = [],
                accept_queue = []}).
 
--record(state, {ip, sockets = []}).
+-record(state, {ip, sockets = [], synchronized = true}).
 
 initial_state() ->
   #state{}.
@@ -245,7 +232,10 @@ accept_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{} ->
       Sock#socket.socket == Socket andalso
-      Sock#socket.tcp_state == listen;
+      Sock#socket.tcp_state == listen andalso
+      (Sock#socket.blocked == [] orelse S#state.synchronized);
+        %% ^ Make sure we're synchronized if there are other accept calls
+        %%   so we can predict which one will be unblocked first.
     false -> false
   end.
 
@@ -271,6 +261,7 @@ accept_callouts(S, [_Socket, Id]) ->
       ?APPLY(set_socket, [NewId]);
     [] ->
       ?SET(Id, blocked, Sock#socket.blocked ++ [?SELF]),
+      ?APPLY(set_synchronized, [false]),  %% Avoid nondeterminism from racing accept calls
       ?MATCH(NewId, ?BLOCK({accept, ?SELF})),
       ?WHEN(NewId /= closed, ?APPLY(set_socket, [NewId]))
   end.
@@ -281,7 +272,7 @@ accept_process(_S, [_Socket, _]) ->
 %% --- close ---
 
 close_states() ->
-  [established, close_wait, listen].  %% Why not syn_rcvd or syn_sent??
+  [established, close_wait, listen, syn_sent].
 
 close_sockets(S) ->
   [ Sock || Sock <- sockets_in_state(S, close_states()),
@@ -298,10 +289,19 @@ close_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{socket = Socket} ->
       Socket /= undefined andalso
+      close_pre_bug6(S, Sock) andalso
       in_tcp_state(Sock, close_states());
     _ ->
       false
   end.
+
+-ifdef(BUG6).
+close_pre_bug6(S, Sock) ->
+  %% work-around for BUG 6: avoid race between ACK and close
+  Sock#socket.socket_type /= listen orelse S#state.synchronized.
+-else.
+close_pre_bug6(_, _) -> true.
+-endif.
 
 close_adapt(S, [_, Id]) ->
   case get_socket(S, Id) of
@@ -311,30 +311,44 @@ close_adapt(S, [_, Id]) ->
       false
   end.
 
-close(Socket, _) ->
-  Root = self(),
-  %% Work around for RACE CONDITION 4
-  Pid = spawn(fun() -> Root ! {self(), tcp_con:usr_close(Socket)} end),
-  receive {Pid, _Res} -> ok end.
-
+close(Socket, _) -> tcp_con:usr_close(Socket).
 
 close_callouts(S, [_, Id]) ->
   Sock = get_socket(S, Id),
   case Sock#socket.socket_type of
     listen ->
       ?PAR([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.blocked ] ++
-           %% BUG: only sends FIN to connections in the accept_queue
-           [ ?APPLY(do_close, [Child]) || Child <- Sock#socket.accept_queue ]),
-           %% Should be this:
-           %% [ ?APPLY(do_close, [Child#socket.id]) ||
-           %%   Child <- S#state.sockets, Child#socket.parent == Id,
-           %%   Child#socket.socket == undefined ]),
+           close_clients_bug67(S, Sock)),
       ?APPLY(reset, [Id]);
     _ ->
       ?APPLY(do_close, [Id]),
       ?SET(Id, blocked, [?SELF]),
       ?BLOCK({close, ?SELF})
   end.
+
+%% BUG 6: only sends FIN to connections in the accept_queue
+%% BUG 7: connections are closed in sequence
+-ifdef(BUG6).
+-ifdef(BUG7).
+close_clients_bug67(_S, Sock) ->
+  [ ?APPLY(close, [unused, Child]) || Child <- Sock#socket.accept_queue ].
+-else.
+close_clients_bug67(_S, Sock) ->
+  [ ?APPLY(do_close, [Child]) || Child <- Sock#socket.accept_queue ].
+-endif.
+-else.
+-ifdef(BUG7).
+close_clients_bug67(S, Sock) ->
+  [ ?APPLY(close, [unused, Child#socket.id]) ||
+    Child <- S#state.sockets, Child#socket.parent == Sock#socket.id,
+    Child#socket.socket == undefined ].
+-else.
+close_clients_bug67(S, Sock) ->
+  [ ?APPLY(do_close, [Child#socket.id]) ||
+    Child <- S#state.sockets, Child#socket.parent == Sock#socket.id,
+    Child#socket.socket == undefined ].
+-endif.
+-endif.
 
 close_process(_, _) -> spawn.
 
@@ -483,10 +497,21 @@ ack_pre(S, [Ip,  Port, RIp, RPort, Seq, Ack, Id]) ->
         RIp   == Sock#socket.rip   andalso
         RPort == Sock#socket.rport andalso
         Seq   == Sock#socket.rseq  andalso
-        Ack   == Sock#socket.seq;
+        Ack   == Sock#socket.seq   andalso
+        sync_ack_in_syn_rcvd(S, Sock);
     _ ->
       false
   end.
+
+%% Avoid race condition between different ACK's in SYN_RCVD to make sure we
+%% can predict which accept gets which connection.
+sync_ack_in_syn_rcvd(S, _) when S#state.synchronized -> true;
+sync_ack_in_syn_rcvd(S, Sock = #socket{ tcp_state = syn_rcvd }) ->
+  case get_socket(S, Sock#socket.parent) of
+    #socket{ accept_queue = Q } -> Q == [];
+    false -> true   %% listen socket is closed, so race doesn't matter
+  end;
+sync_ack_in_syn_rcvd(_, _) -> true.
 
 ack_adapt(S, [_, _, _, _, _, _, Id]) ->
   case get_socket(S, Id) of
@@ -516,6 +541,7 @@ ack_callouts(S, [_Ip, _Port, _RemoteIp, _RemotePort, _Seq, _Ack, Id]) ->
   case Sock#socket.tcp_state of
     syn_rcvd ->
       ?SET(Id, tcp_state, established),
+      ?APPLY(set_synchronized, [false]),  %% avoiding race with other ACK's (and close() to work around BUG 6)
       P = Sock#socket.parent,
       case get_socket(S, P) of
         #socket{blocked = [Pid | Pids]} ->
@@ -614,6 +640,19 @@ deliver(_) -> timer:sleep(1).
 deliver_callouts(S, [Id]) ->
   Sock = get_socket(S, Id),
   ?SET(Id, rcvd, Sock#socket.seq).
+
+%% --- synchronize ---
+%% We use this to avoid race conditions between consecutive commands.
+
+synchronize_args(_S) -> [].
+
+synchronize() -> timer:sleep(1).
+
+synchronize_callouts(_, _) ->
+  ?APPLY(set_synchronized, [true]).
+
+set_synchronized_next(S, _, [Value]) ->
+  S#state{ synchronized = Value }.
 
 %% --- timeout ---
 
@@ -822,7 +861,7 @@ run_test(Seed, Cmds) ->
   check_command_names(Cmds,
     measure(length, commands_length(Cmds),
     aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
-    eqc_component:pretty_commands(?MODULE, Cmds, HSR,
+    ?COMPONENT:pretty_commands(?MODULE, Cmds, HSR,
       Res == ok)))).
 -else.
 run_test(_Seed, Cmds) ->
@@ -835,7 +874,7 @@ run_test(_Seed, Cmds) ->
   check_command_names(Cmds,
     measure(length, commands_length(Cmds),
     aggregate(with_title(transitions), [ Tr || Tr = {_, '->', _} <- call_features(H) ],
-    eqc_component:pretty_commands(?MODULE, Cmds, {H, S, Res},
+    ?COMPONENT:pretty_commands(?MODULE, Cmds, {H, S, Res},
       Res == ok)))).
 -endif.
 
@@ -844,9 +883,11 @@ prop_tcp() ->
   eqc:dont_print_counterexample(
   with_parameter(default_process, worker,
   with_parameter(color, true,
-  ?FORALL(Seed, ?LAZY(os:timestamp()),
   ?FORALL(Cmds, ?COMPONENT:commands(?MODULE),
-    run_test(Seed, Cmds))))))).
+  ?LET(Shrinking, parameter(shrinking, false),
+  ?FORALL(Seed, pulse:seed(),
+  ?ALWAYS(if Shrinking -> 1; true -> 1 end,
+    run_test(Seed, Cmds))))))))).
 
 cleanup() -> cleanup([]).
 cleanup(_Sockets) ->
