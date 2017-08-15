@@ -38,6 +38,10 @@
 -define(MOCKING, eqc_mocking).
 -endif.
 
+%% Remove these when bugs are fixed!
+-define(BUG6, true).
+-define(BUG7, true).
+
 %% NOTES
 %%
 %%  RACE CONDITION 2
@@ -285,12 +289,19 @@ close_pre(S, [Socket, Id]) ->
   case get_socket(S, Id) of
     Sock = #socket{socket = Socket} ->
       Socket /= undefined andalso
-      (Sock#socket.socket_type /= listen orelse S#state.synchronized) andalso
-          %% ^ work-around for BUG 6: avoid race between ACK and close
+      close_pre_bug6(S, Sock) andalso
       in_tcp_state(Sock, close_states());
     _ ->
       false
   end.
+
+-ifdef(BUG6).
+close_pre_bug6(S, Sock) ->
+  %% work-around for BUG 6: avoid race between ACK and close
+  Sock#socket.socket_type /= listen orelse S#state.synchronized.
+-else.
+close_pre_bug6(_, _) -> true.
+-endif.
 
 close_adapt(S, [_, Id]) ->
   case get_socket(S, Id) of
@@ -306,21 +317,38 @@ close_callouts(S, [_, Id]) ->
   Sock = get_socket(S, Id),
   case Sock#socket.socket_type of
     listen ->
-      ?SEQ([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.blocked ] ++
-           %% BUG 6: only sends FIN to connections in the accept_queue
-           %% [ ?APPLY(do_close, [Child]) || Child <- Sock#socket.accept_queue ]),
-           %% BUG 7: connections are closed in sequence!
-           [ ?APPLY(close, [unused, Child]) || Child <- Sock#socket.accept_queue ]),
-           %% Should be this:
-           %% [ ?APPLY(do_close, [Child#socket.id]) ||
-           %%   Child <- S#state.sockets, Child#socket.parent == Id,
-           %%   Child#socket.socket == undefined ]),
+      ?PAR([ ?UNBLOCK({accept, Pid}, closed) || Pid <- Sock#socket.blocked ] ++
+           close_clients_bug67(S, Sock)),
       ?APPLY(reset, [Id]);
     _ ->
       ?APPLY(do_close, [Id]),
       ?SET(Id, blocked, [?SELF]),
       ?BLOCK({close, ?SELF})
   end.
+
+%% BUG 6: only sends FIN to connections in the accept_queue
+%% BUG 7: connections are closed in sequence
+-ifdef(BUG6).
+-ifdef(BUG7).
+close_clients_bug67(_S, Sock) ->
+  [ ?APPLY(close, [unused, Child]) || Child <- Sock#socket.accept_queue ].
+-else.
+close_clients_bug67(_S, Sock) ->
+  [ ?APPLY(do_close, [Child]) || Child <- Sock#socket.accept_queue ].
+-endif.
+-else.
+-ifdef(BUG7).
+close_clients_bug67(S, Sock) ->
+  [ ?APPLY(close, [unused, Child#socket.id]) ||
+    Child <- S#state.sockets, Child#socket.parent == Sock#socket.id,
+    Child#socket.socket == undefined ].
+-else.
+close_clients_bug67(S, Sock) ->
+  [ ?APPLY(do_close, [Child#socket.id]) ||
+    Child <- S#state.sockets, Child#socket.parent == Sock#socket.id,
+    Child#socket.socket == undefined ].
+-endif.
+-endif.
 
 close_process(_, _) -> spawn.
 
