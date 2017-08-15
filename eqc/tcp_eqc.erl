@@ -44,6 +44,11 @@
 %%
 %%    Call to tcp_con:usr_open(), but no SYN is sent.
 %%
+%%    There is a race between the Reader registering with the Tcb and closed:send(syn)
+%%    setting the state to syn_sent. If the state change occurs before the reader is
+%%    registered, the Tcb terminates with badarg trying to notify the undefined
+%%    Tcb#tcb.reader.
+%%
 %%  RACE CONDITION 3
 %%
 %%    Race between incoming and outgoing FIN, causing the call to
