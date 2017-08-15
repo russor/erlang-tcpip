@@ -40,6 +40,10 @@
 
 %% NOTES
 %%
+%%  RACE CONDITION 2
+%%
+%%    Call to tcp_con:usr_open(), but no SYN is sent.
+%%
 %%  RACE CONDITION 3
 %%
 %%    Race between incoming and outgoing FIN, causing the call to
@@ -55,10 +59,16 @@
 %%    first connection has reached TIME_WAIT. Quick fix in PR#7:
 %%    https://github.com/rickpayne/erlang-tcpip/pull/7/commits/bdaed284257d14d3b2e439cf39ae95bd376de6d4
 %%
-%%  RACE 8: Race between listen:send(_, {send, fin}) and tcp_con:wait_state().
+%%  RACE 8: Race between state -> closed and tcp_con:wait_state().
 %%
-%%    It's possible that the Tcb process terminates before we get to
-%%    tcb:subscribe(Tcb, state) in wait_state().
+%%    When closing a listen socket, the state is set to 'closed' twice: first
+%%    in tcp_con:close_connection() by syncset_tcbdata(), and next in tcb:close().
+%%    The race is between these two state changes and the tcb:subscribe() call
+%%    in tcp_con:wait_state(). Three things can happen:
+%%      - subscribe first: two state change messages as expected by wait_state
+%%      - subscribe in between: one state change message -> throw(timeout)
+%%      - subscribe last: tcp_con:usr_close() never returns
+%%    This is the same problem reported as RACE 4.
 
 %% -- State ------------------------------------------------------------------
 
