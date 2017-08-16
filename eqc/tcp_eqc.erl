@@ -41,6 +41,7 @@
 %% Remove these when bugs are fixed!
 -define(BUG6, true).
 -define(BUG7, true).
+-define(RACE3, true).
 
 %% NOTES
 %%
@@ -321,10 +322,18 @@ close_callouts(S, [_, Id]) ->
            close_clients_bug67(S, Sock)),
       ?APPLY(reset, [Id]);
     _ ->
+      ?APPLY(sync_if_race3, [Sock#socket.tcp_state]),
       ?APPLY(do_close, [Id]),
       ?SET(Id, blocked, [?SELF]),
       ?BLOCK({close, ?SELF})
   end.
+
+-ifdef(RACE3).
+sync_if_race3_callouts(_, [St]) ->
+  ?WHEN(St == established, ?APPLY(set_synchronized, [false])).
+-else.
+sync_if_race3_callouts(_, [_]) -> ?EMPTY.
+-endif.
 
 %% BUG 6: only sends FIN to connections in the accept_queue
 %% BUG 7: connections are closed in sequence
@@ -566,7 +575,15 @@ fin_states() ->
   [established, fin_wait_1, fin_wait_2].
 
 fin_pre(S) ->
-  [] /= sockets_in_state(S, fin_states()).
+  [] /= sockets_in_state(S, fin_states()) andalso
+  fin_pre_race3(S).
+
+-ifdef(RACE3).
+fin_pre_race3(S) ->
+  S#state.synchronized orelse [] == sockets_in_state(S, fin_wait_1).
+-else.
+fin_pre_race3(_) -> true.
+-endif.
 
 fin_args(S) ->
   ?LET(Sock, elements(sockets_in_state(S, fin_states())),
