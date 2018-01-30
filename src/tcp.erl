@@ -24,12 +24,15 @@
 
 -module(tcp).
 
--export([start/0,recv/3,reader_init/0, new_mtu/3, dst_unr/3]).
+-export([start/0,start_link/0,recv/3,reader_init/0, new_mtu/3, dst_unr/3]).
 
 -include("tcp_packet.hrl").
 
 start() ->
     spawn(tcp, reader_init, []).
+
+start_link() ->
+    {ok, spawn_link(tcp, reader_init, [])}.
 
 recv(Src_Ip, Dst_Ip, Data) ->
     catch tcp_reader ! {recv, Src_Ip, Dst_Ip, Data}.

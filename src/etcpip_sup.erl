@@ -63,13 +63,45 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
+    SupFlags = #{
+        strategy  => rest_for_one,
+        intensity => 1,
+        period    => 5
+    },
 
-    SupFlags = #{strategy => one_for_one,
-                 intensity => 1,
-                 period => 5},
+    Iface   = get_env(iface),
+    Ip      = ip_to_integer(get_env(ip)),
+    Netmask = ip_to_integer(get_env(netmask)),
+    Gateway = ip_to_integer(get_env(gateway)),
+    Mac     = mac_to_integer(get_env(mac)),
 
-    {ok, {SupFlags, []}}.
+    PhyModule = eth_port,
+    L2Module = arp,
+    L2Sup = list_to_atom(atom_to_list(L2Module) ++ "_sup"),
+
+    {ok, {SupFlags, [
+        #{id => PhyModule,    start => {PhyModule, start_link, [Iface]}},
+        #{id => eth_super,    start => {eth_sup, start_link, [Mac, PhyModule]}, type => supervisor},
+        #{id => L2Sup,        start => {L2Sup, start_link, [Ip, Mac]}, type => supervisor},
+        #{id => checksum,     start => {checksum, start_link, []}},
+        #{id => ip_sup,       start => {ip_sup, start_link, [Ip, Netmask, Gateway, L2Module]}},
+        #{id => icmp_sup,     start => {icmp_sup, start_link, []}},
+        #{id => udp_sup,      start => {udp_sup, start_link, [Ip]}},
+        #{id => tcp_pool_sup, start => {tcp_pool_sup, start_link, []}, type => supervisor},
+        #{id => iss,          start => {iss, start_link, []}},
+        #{id => tcp,          start => {tcp, start_link, []}}
+    ]}}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+get_env(Env) ->
+    {ok, Value} = application:get_env(Env),
+    Value.
+
+ip_to_integer({A, B, C, D}) ->
+    <<R:32>> = <<A, B, C, D>>,
+    R.
+
+mac_to_integer(<<E:48>>) -> E.

@@ -24,12 +24,18 @@
 
 -module(eth).
 
--export([start/2,init_reader/1, init_writer/2, send/3, recv/1, get_mtu/0]).
+-export([start/2, start_reader/1, start_writer/2, init_reader/1, init_writer/2, send/3, recv/1, get_mtu/0]).
 -include("eth.hrl").
 
 %%% API %%%%%%%%%
 start(Mac_Addr, Module) ->
     init(Mac_Addr, Module).
+
+start_reader(Mac_Addr) ->
+    {ok, spawn_link(eth, init_reader, [Mac_Addr])}.
+
+start_writer(Mac_Addr, Module) ->
+    {ok, spawn_link(eth, init_writer, [Mac_Addr, Module])}.
 
 send(Packet, Protocol, Mac_Addr) ->
     catch eth_writer ! {send, Packet, Protocol, Mac_Addr}.

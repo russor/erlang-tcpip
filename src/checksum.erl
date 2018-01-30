@@ -24,7 +24,7 @@
 
 -module(checksum).
 
--export([checksum/1, checksum_1/1, start/0, init/1]).
+-export([checksum/1, checksum_1/1, start/0, start_link/0, init/1]).
 
 -define(INT16MAX, 65535).
 
@@ -38,6 +38,16 @@ start() ->
           erlang:error("cannot start checksum driver")
     end.
 
+start_link() ->
+    % FIXME: De-duplicate together with start/1
+    Ref = make_ref(),
+    Self = self(),
+    Pid = spawn_link(checksum, init, [{Self, Ref}]),
+    receive
+      {Ref, started} -> {ok, Pid}
+      after 5000 ->
+          erlang:error("cannot start checksum driver")
+    end.
 
 %% Note that you need to set $ERL_LIBS to the ebin directory to make 
 %% code:priv_dir work. The build tool rebar3 does that for one, 

@@ -25,7 +25,7 @@
 -module(icmp).
 
 -import(checksum,[checksum/1]).
--export([start/0,init_reader/0, init_writer/0, recv/2, send/2]).
+-export([start/0,start_reader/0,start_writer/0,init_reader/0, init_writer/0, recv/2, send/2]).
 
 -define(ICMP_ECHO_REPLY, 0).
 -define(ICMP_DESTINATION_UNREACHABLE, 3).
@@ -49,6 +49,12 @@
 
 start() ->
     init().
+
+start_reader() ->
+    {ok, spawn_link(icmp, init_writer, [])}.
+
+start_writer() ->
+    {ok, spawn(icmp, init_reader, [])}.
 
 init() ->
     spawn(icmp, init_writer, []),

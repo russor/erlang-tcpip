@@ -47,13 +47,7 @@
 %% @end
 %%--------------------------------------------------------------------
 start(_StartType, _StartArgs) ->
-    {ok, self()}.
-    %% case etcpip_sup:start_link() of
-    %%     {ok, Pid} ->
-    %%         {ok, Pid};
-    %%     Error ->
-    %%         Error
-    %% end.
+    etcpip_sup:start_link().
 
 %%--------------------------------------------------------------------
 %% @private

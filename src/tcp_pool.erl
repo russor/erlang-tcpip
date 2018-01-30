@@ -24,13 +24,19 @@
 
 -module(tcp_pool).
 
--export([start/1,init/1,get/1,add/2,remove/1]).
+-export([start/1,start_link/1,add_ip/1,init/1,get/1,add/2,remove/1]).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%
 
 start(Ip) ->
     spawn(tcp_pool, init, [Ip]).
+
+start_link(Ip) ->
+    {ok, spawn_link(tcp_pool, init, [Ip])}.
+
+add_ip(Ip) ->
+    tcp_pool_sup:add_ip(Ip).
 
 get(Socket) ->
     tcp_pool ! {get, Socket, self()},

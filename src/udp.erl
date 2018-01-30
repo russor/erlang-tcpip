@@ -26,13 +26,19 @@
 
 -import(checksum,[checksum/1]).
 -import(packet_check,[check_packet/4, compute_checksum/5]).
--export([start/1,init/1, init_reader/0, init_writer/1, recv/3, send/4, usr_open/3]).
+-export([start/1,start_reader/0,start_writer/1,init/1, init_reader/0, init_writer/1, recv/3, send/4, usr_open/3]).
 
 -include("ip.hrl").
 %%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 start(Ip_Addr) ->
     init(Ip_Addr).
+
+start_reader() ->
+    {ok, spawn_link(udp, init_reader, [])}.
+
+start_writer(Ip_Addr) ->
+    {ok, spawn_link(udp, init_writer, [Ip_Addr])}.
 
 recv(Src_Ip, Dst_Ip, Data) ->
     udp_reader ! {recv, Src_Ip, Dst_Ip, Data}.
@@ -49,15 +55,15 @@ usr_open(Lc_Port, Dst_Ip, Dst_Port) -> %% This will send incoming packets to Lc_
 % as it includes a pseudo ip header. This should be fixed if
 % we want to support more than one ip
 init(Ip_Addr) ->
-    R = spawn(udp, init_reader, []),
-    register(udp_reader, R),
-    W = spawn(udp, init_writer, [Ip_Addr]),
-    register(udp_writer, W).
+    spawn(udp, init_reader, []),
+    spawn(udp, init_writer, [Ip_Addr]).
 
 init_reader() ->
+    register(udp_reader, self()),
     reader_loop([]).
 
 init_writer(Ip_Addr) ->
+    register(udp_writer, self()),
     writer_loop(Ip_Addr).
 
 reader_loop(Conns) ->

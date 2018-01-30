@@ -24,7 +24,7 @@
 
 -module(arp).
 
--export([start/2,init_reader/2, init_writer/2, ip_queue_init/2, send/2, answer/2, solve/1, recv/1,
+-export([start/2, start_reader/2, start_writer/2, start_ip_queue/2, init_reader/2, init_writer/2, ip_queue_init/2, send/2, answer/2, solve/1, recv/1,
          get_mtu/0]).
 
 -include("eth.hrl").
@@ -38,6 +38,15 @@
 
 start(Ip, Mac) ->
     init(Ip, Mac).
+
+start_reader(Ip, Mac) ->
+    {ok, spawn_link(arp, init_reader, [Ip, Mac])}.
+
+start_writer(Ip, Mac) ->
+    {ok, spawn_link(arp, init_writer, [Ip, Mac])}.
+
+start_ip_queue(Ip, Mac) ->
+    {ok, spawn_link(arp, ip_queue_init, [Ip, Mac])}.
 
 % Send Packet to Ip Address. Every packet sent by ip passes through here
 send(Packet, Ip_Addr) ->
@@ -74,10 +83,11 @@ init(Ip, Mac) ->
     ets:new(arp_cache, [set, public, named_table]),
     spawn(arp, init_reader, [Ip, Mac]),
     spawn(arp, init_writer, [Ip, Mac]),
-    spawn(arp, ip_queue_init, [Ip, Mac]). %% This process stores outgoing packets which have to wait for an arp reply
-    
+    spawn(arp, ip_queue_init, [Ip, Mac]).
+
 ip_queue_init(Ip, Mac) -> 
-    ets:new(ip_queue,[bag, private, named_table]),  
+    %% This process stores outgoing packets which have to wait for an arp reply
+    ets:new(ip_queue,[bag, private, named_table]),
     register(ip_queue, self()),
     ip_queue_loop(Ip, Mac).
 

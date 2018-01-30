@@ -32,7 +32,7 @@
 
 start() ->
     {ok, Iface} = application:get_env(etcpip, iface),
-    eth_port:start(Iface),
+    % eth_port:start(Iface),
     init(true, eth_port, arp).
 
 start(PhyModule, L2Module) ->

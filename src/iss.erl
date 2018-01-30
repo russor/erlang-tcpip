@@ -24,7 +24,7 @@
 
 -module(iss).
 
--export([start/0,init/0,get_iss/0]).
+-export([start/0,start_link/0,init/0,get_iss/0]).
 
 -define(TCP_MAX_ISS, 4294967295).
 -define(TCP_ISS_INC, 64000).
@@ -34,8 +34,11 @@
 start() ->
     spawn(iss, init, []).
 
+start_link() ->
+    {ok, spawn_link(iss, init, [])}.
+
 get_iss() ->
-    iss ! {get_iss, self()}, 
+    iss ! {get_iss, self()},
     receive
 	{iss, Iss} ->
 	    Iss

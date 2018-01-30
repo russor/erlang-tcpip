@@ -25,7 +25,7 @@
 -module(ip).
 
 -import(checksum,[checksum/1, checksum_1/1]).
--export([start/4,init_reader/2,init_writer/4,recv/1,send/4, fragment/4,
+-export([start/4,start_writer/4,start_reader/2,init_reader/2,init_writer/4,recv/1,send/4, fragment/4,
 	 change_mtu/2, dst_unreachable/1, get_mtu/0]).
 
 -include("ip.hrl").
@@ -37,6 +37,12 @@
 
 start(Ip_Addr, NetMask, Default_Gateway, L2Module) ->
     init(Ip_Addr, NetMask, Default_Gateway, L2Module).
+
+start_writer(Ip_Addr, NetMask, Default_Gateway, Module) ->
+    {ok, spawn_link(ip, init_writer, [Ip_Addr, NetMask, Default_Gateway, Module])}.
+
+start_reader(Ip_Addr, NetMask) ->
+    {ok, spawn_link(ip, init_reader, [Ip_Addr, NetMask])}.
 
 recv(Packet) ->
     catch ip_reader ! {recv, Packet}.

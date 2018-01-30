@@ -24,10 +24,13 @@
 
 -module(eth_port).
 
--export([start/1, init/1, init_writer/2, send/1, get_stats/0, get_mtu/0]).
+-export([start/1, start_link/1, init/1, init_writer/2, send/1, get_stats/0, get_mtu/0]).
 
 start(Iface) ->
     spawn_link(eth_port, init, [Iface]).
+
+start_link(Iface) ->
+    {ok, spawn_link(eth_port, init, [Iface])}.
 
 init(Iface) ->
     erl_ddll:load_driver(code:priv_dir(etcpip), "eth_driver"),
