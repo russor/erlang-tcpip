@@ -87,9 +87,10 @@ init([]) ->
         #{id => ip_sup,       start => {ip_sup, start_link, [Ip, Netmask, Gateway, L2Module]}},
         #{id => icmp_sup,     start => {icmp_sup, start_link, []}},
         #{id => udp_sup,      start => {udp_sup, start_link, [Ip]}},
-        #{id => tcp_pool_sup, start => {tcp_pool_sup, start_link, []}, type => supervisor},
+        #{id => tcp_pool,     start => {tcp_pool, start_link, [Ip]}},
         #{id => iss,          start => {iss, start_link, []}},
-        #{id => tcp,          start => {tcp, start_link, []}}
+        #{id => tcp,          start => {tcp, start_link, []}},
+        #{id => tcp_sup,      start => {tcp_sup, start_link, []}}
     ]}}.
 
 %%%===================================================================

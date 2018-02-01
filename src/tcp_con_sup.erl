@@ -17,12 +17,12 @@
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
--module(tcp_pool_sup).
+-module(tcp_con_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0,add_ip/1]).
+-export([start_link/0, start_con/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -34,8 +34,14 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-add_ip(Ip) ->
-    {ok, _} = supervisor:start_child(?MODULE, [Ip]).
+start_con(Sup, Tcb) ->
+    {ok, Writer} = supervisor:start_child(Sup,
+        #{id => reader, start => {tcp_con, start_writer, [Tcb]}}
+    ),
+    {ok, Reader} = supervisor:start_child(Sup,
+        #{id => reader, start => {tcp_con, start_reader, [Tcb, Writer]}}
+    ),
+    {ok, Reader, Writer}.
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -43,13 +49,11 @@ add_ip(Ip) ->
 
 init([]) ->
     SupFlags = #{
-        strategy  => simple_one_for_one,
+        strategy  => rest_for_one,
         intensity => 1,
         period    => 5
     },
-    {ok, {SupFlags, [
-        #{id => tcp_pool, start => {tcp_pool, start_link, []}}
-    ]}}.
+    {ok, {SupFlags, []}}.
 
 %%%===================================================================
 %%% Internal functions
