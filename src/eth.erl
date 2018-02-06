@@ -21,112 +21,66 @@
 %%% limitations under the License.
 %%%
 %%%-------------------------------------------------------------------
-
 -module(eth).
 
--export([start/2, start_reader/1, start_writer/2, init_reader/1, init_writer/2, send/3, recv/1, get_mtu/0]).
+% API
+-export([start_reader/1, start_writer/1, send/3, recv/1, get_mtu/0]).
+
+% Includes
 -include("eth.hrl").
 
-%%% API %%%%%%%%%
-start(Mac_Addr, Module) ->
-    init(Mac_Addr, Module).
+%--- API -----------------------------------------------------------------------
 
-start_reader(Mac_Addr) ->
-    {ok, spawn_link(eth, init_reader, [Mac_Addr])}.
+start_reader(Mac) ->
+    etcpip_proc:start_link(eth_reader, #{
+        init        => fun() -> Mac end,
+        handle_cast => fun reader_handle_cast/2
+    }).
 
-start_writer(Mac_Addr, Module) ->
-    {ok, spawn_link(eth, init_writer, [Mac_Addr, Module])}.
+start_writer(Mac) ->
+    etcpip_proc:start_link(eth_writer, #{
+        init        => fun() -> Mac end,
+        handle_cast => fun writer_handle_cast/2
+    }).
 
-send(Packet, Protocol, Mac_Addr) ->
-    catch eth_writer ! {send, Packet, Protocol, Mac_Addr}.
+send(Payload, Protocol, DstMac) ->
+    etcpip_proc:cast(eth_writer, {send, Payload, Protocol, DstMac}).
 
 recv(Packet) ->
-    catch eth_reader ! {recv, Packet}.
+    etcpip_proc:cast(eth_reader, {recv, Packet}).
 
-get_mtu() ->
-    catch eth_writer ! {get_mtu, self()},
-    receive
-	{mtu, MTU} ->
-	    {mtu, MTU}
-    end.
+get_mtu() -> eth_port:get_mtu().
 
-%%% Reader and Writer Loops %%%%%%%
+%--- Reader --------------------------------------------------------------------
 
-init(Mac_Addr, Module) ->
-    spawn(eth, init_reader, [Mac_Addr]),
-    spawn(eth, init_writer, [Mac_Addr, Module]).
-
-init_reader(Mac_Addr) ->
-    register(eth_reader, self()),
-    reader_loop(Mac_Addr).
-
-init_writer(Mac_Addr, Module) ->
-    register(eth_writer, self()),
-    writer_loop(Mac_Addr, Module).
-
-writer_loop(Mac_Addr, Module) ->
-    receive
-	{send, Packet, Protocol, Dst_Mac_Addr} ->
-	    send_packet(Module, Packet, Protocol, Dst_Mac_Addr, Mac_Addr);
-	{get_mtu, From} ->
-	    From ! Module:get_mtu()
+reader_handle_cast({recv, Packet}, Mac) ->
+    case decode(Packet, Mac) of
+        {ok, Protocol, Data} -> Protocol:recv(Data);
+        ignore               -> ok
     end,
-    writer_loop(Mac_Addr, Module).
+    {noreply, Mac}.
 
-reader_loop(Mac_Addr) ->
-    receive
-		{recv, Packet} ->
-			case catch decode(Packet,Mac_Addr) of
-				{ok, Protocol, Data} ->
-					Protocol:recv(Data);
-				{error, Error} ->
-					{error, Error}; % Should probably implement an optional logging for decoding errors
-				E ->
-                                        io:format("Recv error: ~p~n", [E]),
-					{error, unknown}
-			end
-    end,
-    reader_loop(Mac_Addr).
+%--- Writer --------------------------------------------------------------------
 
+writer_handle_cast({send, Payload, Protocol, DstMac}, Mac) ->
+    eth_port:send(encode(DstMac, Mac, Protocol, Payload)),
+    {noreply, Mac}.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Writer help Functions
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%--- Internal ------------------------------------------------------------------
 
-send_packet(Module, Packet, Protocol, Dst_Mac, Src_Mac) ->
-    Eth_Protocol = protocol(Protocol),
-    Module:send([<<Dst_Mac:48/big-integer, Src_Mac:48/big-integer,
-		   Eth_Protocol:16/big-integer>>, 
-                 Packet]).
-	
+encode(DstMac, SrcMac, Protocol, Payload) ->
+    EthProtocol = encode_protocol(Protocol),
+    [<<DstMac:48/big, SrcMac:48/big, EthProtocol:16/big>>, Payload].
 
-%% Ethernet protocol constant to atom, and viceversa
-%%  atom to constant is used to encode outgoing packets, 
-%%  constant to atom is used to decide which module will receive the decoded packet
+decode(<<Mac:48/big, _Src:48/big, Protocol:16/big, Data/binary>>, Mac)  ->
+    {ok, decode_protocol(Protocol), Data};
+decode(<<?ETH_BROAD:48/big, _Src:48/big, Protocol:16/big, Data/binary>>, _Mac) ->
+    {ok, decode_protocol(Protocol), Data};
+decode(_Packet, _Mac) ->
+    ignore.
 
-protocol(ip) -> ?ETH_IP;
-protocol(arp) -> ?ETH_ARP;
-protocol(?ETH_IP) -> ip;
-protocol(?ETH_ARP) -> arp;
-protocol(Unknown) ->
-    io:format("unknown protocol ~p~n", [Unknown]),
-    unknown.
+encode_protocol(ip) -> ?ETH_IP;
+encode_protocol(arp) -> ?ETH_ARP.
 
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Reader Help Functions
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-decode(Packet, Mac) when is_binary(Packet) ->
-    case Packet of
-	<<Mac:48/big-integer, _Src:48/big-integer, 
-	 Protocol:16/big-integer,
-	 Data/binary>> -> % For us
-	    {ok, protocol(Protocol), Data};
-	<<?ETH_BROAD:48/big-integer, _Src:48/big-integer,
-	 Protocol:16/big-integer, 
-	 Data/binary>> -> % Broadcast
-	    {ok, protocol(Protocol), Data};
-	_ ->
-	    {error, not_for_us}
-    end.
+decode_protocol(?ETH_IP) -> ip;
+decode_protocol(?ETH_ARP) -> arp.
