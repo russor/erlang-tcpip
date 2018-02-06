@@ -21,67 +21,59 @@
 %%% limitations under the License.
 %%%
 %%%-------------------------------------------------------------------
-
 -module(eth_port).
 
--export([start/1, start_link/1, init/1, init_writer/2, send/1, get_stats/0, get_mtu/0]).
+% API
+-export([start_reader/1, start_writer/0, send/1, get_instance/0, get_stats/0, get_mtu/0]).
 
-start(Iface) ->
-    spawn_link(eth_port, init, [Iface]).
+%--- API -----------------------------------------------------------------------
 
-start_link(Iface) ->
-    {ok, spawn_link(eth_port, init, [Iface])}.
+start_reader(Iface) ->
+    etcpip_proc:start_link(eth_port_reader, #{
+        init        => fun() -> reader_init(Iface) end,
+        handle_call => fun reader_call/3,
+        handle_info => fun reader_info/2
+    }).
 
-init(Iface) ->
+start_writer() ->
+    etcpip_proc:start_link(eth_port_writer, #{
+        init        => fun writer_init/0,
+        handle_cast => fun writer_cast/2
+    }).
+
+send(Packet) -> etcpip_proc:cast(eth_port_writer, {send, Packet}).
+
+get_instance() -> etcpip_proc:call(eth_port_reader, get_instance).
+
+get_mtu() -> {mtu, etcpip_proc:call(eth_port_reader, get_mtu)}.
+
+get_stats() -> {ok, etcpip_proc:call(eth_port_reader, get_stats)}.
+
+%--- Reader --------------------------------------------------------------------
+
+reader_init(Iface) ->
     erl_ddll:load_driver(code:priv_dir(etcpip), "eth_driver"),
     Port = open_port({spawn_driver, eth_driver},[binary]),
     port_control(Port, 0, Iface),
-    spawn_link(eth_port, init_writer, [Port, self()]),
-    register(port_reader, self()),
-    reader_loop(Port).
+    Port.
 
-init_writer(Port, CPid) ->
-    register(port_writer, self()),
-    writer_loop(Port, CPid).
+reader_call(get_instance, _From, Port) ->
+    {reply, {self(), Port}, Port};
+reader_call(get_stats, _From, Port) ->
+    Stats = port_control(Port, 1, []),
+    {reply, {ok, Stats}, Port};
+reader_call(get_mtu, _From, Port) ->
+    <<MTU:32/native-integer>> = list_to_binary(port_control(Port, 2, [])),
+    {reply, MTU, Port}.
 
-send(Packet) ->
-    port_writer ! {send, Packet}.
+reader_info({Port, {data, Data}}, Port) ->
+    eth:recv(Data),
+    {noreply, Port}.
 
-get_mtu() ->
-    port_reader ! {get_mtu, self()},
-    receive
-	{mtu, Mtu} ->
-	    {mtu, Mtu}
-    end.
+%--- Writer --------------------------------------------------------------------
 
-get_stats() ->
-    port_reader ! {get_stats, self()},
-    receive
-    	{stats, Stats} ->
-		{ok, Stats}
-    end.
+writer_init() -> eth_port:get_instance().
 
-writer_loop(Port, CPid) ->
-    receive 
-	{send, Packet} ->
-	    Port ! {CPid, {command, Packet}},
-	    writer_loop(Port, CPid)
-    end.
-
-reader_loop(Port) ->
-    receive
-	{Port, {data, Data}} ->
-	    eth:recv(Data),
-	    reader_loop(Port);
-	{get_stats, From} ->
-	    Stats = port_control(Port, 1, []),
-	    From ! {stats, Stats},
-	    reader_loop(Port);
-	{get_mtu, From} ->
-	    List_Mtu = port_control(Port, 2, []),
-	    <<Mtu:32/native-integer>> = list_to_binary(List_Mtu),
-	    From ! {mtu, Mtu},
-	    reader_loop(Port);
-	_ ->
-	    reader_loop(Port)
-    end.
+writer_cast({send, Packet}, {Reader, Port} = State) ->
+    Port ! {Reader, {command, Packet}},
+    {noreply, State}.

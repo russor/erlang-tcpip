@@ -80,7 +80,11 @@ init([]) ->
     L2Sup = list_to_atom(atom_to_list(L2Module) ++ "_sup"),
 
     {ok, {SupFlags, [
-        #{id => PhyModule,    start => {PhyModule, start_link, [Iface]}},
+        #{id => eth_port_reader, start => {eth_port, start_reader, [Iface]}},
+        #{id => eth_port_writer, start => {PhyModule, start_writer, []}},
+        % #{id => PhyModule,    start => {PhyModule, start_link, [Iface]}},
+
+
         #{id => eth_super,    start => {eth_sup, start_link, [Mac, PhyModule]}, type => supervisor},
         #{id => L2Sup,        start => {L2Sup, start_link, [Ip, Mac]}, type => supervisor},
         #{id => checksum,     start => {checksum, start_link, []}},
