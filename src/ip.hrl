@@ -22,7 +22,23 @@
 %%%
 %%%-------------------------------------------------------------------
 
+%--- IPv4 ----------------------------------------------------------------------
 
 -define(IP_PROTO_ICMP, 1).
 -define(IP_PROTO_TCP,  6).
 -define(IP_PROTO_UDP, 17).
+
+%--- IPv6 ----------------------------------------------------------------------
+
+-define(IP_PROTO_ICMPv6,              58).
+-define(IP_PROTO_IPv6_NO_NEXT_HEADER, 59).
+
+-record(ipv6, {
+    plen,
+    hlim,
+    src,
+    dst,
+    src_mac,
+    dst_mac,
+    headers = []
+}).

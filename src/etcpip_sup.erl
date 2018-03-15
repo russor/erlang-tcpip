@@ -78,6 +78,7 @@ init([]) ->
     L2Module = arp,
     L2Sup = list_to_atom(atom_to_list(L2Module) ++ "_sup"),
 
+    % TODO: Reverse processes later in the chain are already started
     {ok, {SupFlags, [
         #{id => eth_port_reader, start => {eth_port, start_reader, [Iface]}},
         #{id => eth_port_writer, start => {eth_port, start_writer, []}},
@@ -92,7 +93,13 @@ init([]) ->
         #{id => tcp_pool,     start => {tcp_pool, start_link, [Ip]}},
         #{id => iss,          start => {iss, start_link, []}},
         #{id => tcp,          start => {tcp, start_link, []}},
-        #{id => tcp_sup,      start => {tcp_sup, start_link, []}}
+        #{id => tcp_sup,      start => {tcp_sup, start_link, []}},
+
+        % IPv6
+        #{id => ipv6_reader,   start => {ipv6, start_reader, []}},
+        #{id => ipv6_writer,   start => {ipv6, start_writer, []}},
+        #{id => icmpv6_reader, start => {icmpv6, start_reader, []}},
+        #{id => icmpv6_writer, start => {icmpv6, start_writer, []}}
     ]}}.
 
 %%%===================================================================

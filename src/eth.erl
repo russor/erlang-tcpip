@@ -72,6 +72,8 @@ encode(DstMac, SrcMac, Protocol, Payload) ->
     EthProtocol = encode_protocol(Protocol),
     [<<DstMac:48/big, SrcMac:48/big, EthProtocol:16/big>>, Payload].
 
+decode(<<_Mac:48/big, _Src:48/big, ?ETH_IPV6:16/big, Data/binary>>, _) ->
+    {ok, decode_protocol(?ETH_IPV6), Data};
 decode(<<Mac:48/big, _Src:48/big, Protocol:16/big, Data/binary>>, Mac)  ->
     {ok, decode_protocol(Protocol), Data};
 decode(<<?ETH_BROAD:48/big, _Src:48/big, Protocol:16/big, Data/binary>>, _Mac) ->
@@ -80,7 +82,9 @@ decode(_Packet, _Mac) ->
     ignore.
 
 encode_protocol(ip) -> ?ETH_IP;
+encode_protocol(ipv6) -> ?ETH_IPV6;
 encode_protocol(arp) -> ?ETH_ARP.
 
 decode_protocol(?ETH_IP) -> ip;
+decode_protocol(?ETH_IPV6) -> ipv6;
 decode_protocol(?ETH_ARP) -> arp.

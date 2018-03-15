@@ -26,3 +26,4 @@
 -define(ETH_BROAD, 16#ffffffffffff).
 -define(ETH_IP, 16#0800).
 -define(ETH_ARP, 16#0806).
+-define(ETH_IPV6, 16#86DD).
