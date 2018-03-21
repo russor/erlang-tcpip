@@ -8,17 +8,9 @@
 %--- API -----------------------------------------------------------------------
 
 encode_decode_test_() ->
-    filelib:fold_files("test/encode_decode/ipv6", ".+\.pcap$", true, fun(F, Acc) ->
-        Pcap = test_utils:pcap_to_packets(F),
-        Acc ++ [
-            {
-                lists:flatten(io_lib:format("~s: packet #~b", [F, N])),
-                fun() -> ?assert_encode_decode(test_utils:strip_eth(Packet)) end
-            }
-            ||
-            #pcap_packet{number = N, data = Packet} <- Pcap#pcap.packets
-        ]
-    end, []).
+    ?pcap_packets("test/encode_decode/ipv6", Packet,
+        fun() -> ?assert_encode_decode(test_utils:strip_eth(Packet)) end
+    ).
 
 encode_decode_no_next_header_test() ->
     ?assert_encode_decode(<<

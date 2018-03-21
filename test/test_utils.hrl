@@ -19,12 +19,13 @@
     ?assertEqual(Packet, iolist_to_binary(encode(decode(Packet))))
 ).
 
--define(encode_decode_tests(Path, Filter),
-    filelib:fold_files(Path, ".+\.bin$", true, fun(F, Acc) ->
-        {ok, Raw} = file:read_file(F),
-        [{F, fun() ->
-            P = Filter(Raw),
-            ?assert_encode_decode(P)
-        end}|Acc]
+-define(pcap_packets(Path, Variable, Test),
+    filelib:fold_files(Path, ".+\.pcap$", true, fun(_F, _Acc) ->
+        _Pcap = test_utils:pcap_to_packets(_F),
+        _Acc ++ [
+            {lists:flatten(io_lib:format("~s: packet #~b", [_F, _N])), Test}
+            ||
+            #pcap_packet{number = _N, data = Variable} <- _Pcap#pcap.packets
+        ]
     end, [])
 ).
