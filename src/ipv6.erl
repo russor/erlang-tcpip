@@ -5,11 +5,13 @@
 -export([start_writer/0]).
 -export([recv/1]).
 -export([send/1]).
--export([decode/1]). % DEBUG
+
+-ifdef(TEST).
+-export([decode/1]).
+-export([encode/1]).
+-endif.
 
 -include("ip.hrl").
-
--define(HOP_LIMIT, 128).
 
 %--- API -----------------------------------------------------------------------
 
@@ -35,7 +37,7 @@ send(Packet) ->
 
 reader_handle_cast({recv, Data}, State) ->
     case decode(Data) of
-        Packet = #ipv6{headers = [{Protocol = icmpv6, _}|_]} ->
+        Packet = #ipv6{headers = [{Protocol = icmpv6, _Payload}|_]} ->
             Protocol:recv(Packet);
         _Drop ->
             ok
@@ -52,8 +54,8 @@ writer_handle_cast({send, Packet}, State) ->
 
 decode(<<6:4, Bin/bitstring>>) ->
     <<
-        _TClass:8,
-        _Flow:20,
+        TClass:8,
+        Flow:20,
         PLen:16/big,
         Next:8/big,
         HLim:8/big,
@@ -62,6 +64,8 @@ decode(<<6:4, Bin/bitstring>>) ->
         Data/bitstring
     >> = Bin,
     Decoded = #ipv6{
+        tclass = TClass,
+        flow = Flow,
         plen = PLen,
         hlim = HLim,
         src = Src,
@@ -71,36 +75,43 @@ decode(<<6:4, Bin/bitstring>>) ->
 
 decode_headers(Packet, ?IP_PROTO_ICMPv6, Data, Headers) ->
     Packet#ipv6{headers = [{icmpv6, Data}|Headers]};
-decode_headers(Packet, ?IP_PROTO_IPv6_NO_NEXT_HEADER, Data, Headers) ->
-    Packet#ipv6{headers = [{ipv6_no_next, Data}|Headers]};
+decode_headers(Packet, ?IP_PROTO_IPv6_NO_NEXT_HEADER, _Data, Headers) ->
+    Packet#ipv6{headers = Headers};
 decode_headers(Packet, ?IP_PROTO_TCP, Data, Headers) ->
     Packet#ipv6{headers = [{tcp, Data}|Headers]};
 decode_headers(Packet, ?IP_PROTO_UDP, Data, Headers) ->
     Packet#ipv6{headers = [{udp, Data}|Headers]};
-decode_headers(Packet, Type, <<Next:8/big, Len:8/big, Data/bitstring>>, Headers) ->
+decode_headers(Packet, Type, <<Next, Len, Data/bitstring>>, Headers) ->
     Length = (Len + 1) * 8,
     <<Value:Length/bitstring, Rest/bitstring>> = Data,
     decode_headers(Packet, Next, Rest, [{Type, Value}|Headers]).
 
-encode(#ipv6{src = Src, dst = Dst, headers = Headers}) ->
-    % PLen = ?TODO_length,
-    % Next = ?TODO_next_header,
+encode(Packet) when is_record(Packet, ipv6) ->
+    #ipv6{
+        tclass = TClass, flow = Flow, src = Src, hlim = HLim, dst = Dst, headers = Headers
+    } = Packet,
     {PLen, Next, Payload} = encode_headers(Headers),
     [<<
         6:4,
-        0:8,
-        0:20,
+        TClass,
+        Flow:20,
         PLen:16/big,
-        Next:8/big,
-        ?HOP_LIMIT:8/big,
-        Src/bitstring,
-        Dst/bitstring
+        Next,
+        HLim,
+        Src:128/bitstring,
+        Dst:128/bitstring
     >>, Payload].
 
 encode_headers([])      -> {0, ?IP_PROTO_IPv6_NO_NEXT_HEADER, []};
-encode_headers(Headers) -> encode_headers(Headers, 0, undefined, []).
+encode_headers([{Type, Data}|Headers]) ->
+    encode_headers(Headers, byte_size(Data), encode_type(Type), [Data]).
 
 encode_headers([], PLen, Next, Acc) ->
-    {PLen, Next, lists:reverse(Acc)};
-encode_headers([{icmpv6, Data}|Headers], PLen, _Next, Acc) ->
-    encode_headers(Headers, PLen + byte_size(Data), ?IP_PROTO_ICMPv6, [Data|Acc]).
+    {PLen, Next, Acc};
+encode_headers([{Type, Data}|Headers], PLen, Next, Acc) ->
+    Len = byte_size(Data),
+    encode_headers(Headers, PLen + Len + 2, encode_type(Type), [[Next, Len - 1, Data]|Acc]).
+
+encode_type(udp)                        -> ?IP_PROTO_UDP;
+encode_type(icmpv6)                     -> ?IP_PROTO_ICMPv6;
+encode_type(Type) when is_integer(Type) -> Type.

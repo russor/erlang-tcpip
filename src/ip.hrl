@@ -33,9 +33,13 @@
 -define(IP_PROTO_ICMPv6,              58).
 -define(IP_PROTO_IPv6_NO_NEXT_HEADER, 59).
 
+-define(IP6_HOP_LIMIT, 64). % TODO: Make configurable
+
 -record(ipv6, {
+    tclass = 0,
+    flow = 0,
     plen,
-    hlim,
+    hlim = ?IP6_HOP_LIMIT,
     src,
     dst,
     src_mac,

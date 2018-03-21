@@ -71,6 +71,7 @@ init([]) ->
 
     Iface   = get_env(iface),
     Ip      = ip_to_integer(get_env(ip)),
+    IP6     = parse_ip6(get_env([ip6, addr])),
     Netmask = ip_to_integer(get_env(netmask)),
     Gateway = ip_to_integer(get_env(gateway)),
     Mac     = mac_to_integer(get_env(mac)),
@@ -98,7 +99,7 @@ init([]) ->
         % IPv6
         #{id => ipv6_reader,   start => {ipv6, start_reader, []}},
         #{id => ipv6_writer,   start => {ipv6, start_writer, []}},
-        #{id => icmpv6_reader, start => {icmpv6, start_reader, []}},
+        #{id => icmpv6_reader, start => {icmpv6, start_reader, [IP6, Mac]}},
         #{id => icmpv6_writer, start => {icmpv6, start_writer, []}}
     ]}}.
 
@@ -106,12 +107,32 @@ init([]) ->
 %%% Internal functions
 %%%===================================================================
 
+get_env(Path) when is_list(Path) ->
+    Envs = application:get_all_env(),
+    try get_env(Path, Envs)
+    catch key_not_found -> error({key_not_found, Path, Envs})
+    end;
 get_env(Env) ->
     {ok, Value} = application:get_env(Env),
     Value.
+
+get_env([], Value) ->
+    Value;
+get_env([Key|Path], Envs) ->
+    case proplists:lookup(Key, Envs) of
+        none         -> throw(key_not_found);
+        {Key, Value} -> get_env(Path, Value)
+    end.
 
 ip_to_integer({A, B, C, D}) ->
     <<R:32>> = <<A, B, C, D>>,
     R.
 
 mac_to_integer(<<E:48>>) -> E.
+
+parse_ip6(String) ->
+    case inet:parse_ipv6_address(String) of
+        {error, einval} -> error({invalid_ipv6_address, String});
+        {ok, {A, B, C, D, E, F, G, H}} ->
+            <<A, B, C, D, E, F, G, H>>
+    end.

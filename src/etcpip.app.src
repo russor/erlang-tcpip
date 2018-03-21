@@ -22,6 +22,7 @@
                   kernel,
                   stdlib,
                   crypto,
+                  inets,
                   wx, runtime_tools, debugger
                  ]},
   {included_applications, []},
