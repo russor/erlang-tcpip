@@ -134,5 +134,5 @@ parse_ip6(String) ->
     case inet:parse_ipv6_address(String) of
         {error, einval} -> error({invalid_ipv6_address, String});
         {ok, {A, B, C, D, E, F, G, H}} ->
-            <<A, B, C, D, E, F, G, H>>
+            <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>
     end.

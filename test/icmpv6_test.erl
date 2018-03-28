@@ -9,12 +9,17 @@
 %--- API -----------------------------------------------------------------------
 
 encode_decode_test_() ->
-    ?pcap_packets("test/encode_decode/ipv6/icmpv6", Packet,
-        fun() -> ?assert_encode_decode(strip(Packet)) end
+    ?pcap_packets("test/encode_decode/ipv6/icmpv6", Frame,
+        fun() ->
+            Packet = test_utils:strip_eth(Frame),
+            #ipv6{headers = [{icmpv6, Data}|_]} = IPv6 = ipv6:decode(Packet),
+            #ipv6{headers = [Decoded|_]} = icmpv6:decode(IPv6),
+            ?assertEqual(Data, iolist_to_binary(encode(Decoded)))
+        end
     ).
 
 %--- Internal ------------------------------------------------------------------
 
-strip(Packet) ->
-    #ipv6{headers = [{icmpv6, Data}|_]} = ipv6:decode(test_utils:strip_eth(Packet)),
+strip(Frame) ->
+    #ipv6{headers = [{icmpv6, Data}|_]} = ipv6:decode(test_utils:strip_eth(Frame)),
     Data.

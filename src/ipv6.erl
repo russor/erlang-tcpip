@@ -5,6 +5,7 @@
 -export([start_writer/0]).
 -export([recv/1]).
 -export([send/1]).
+-export([pseudo_header/2]).
 
 -ifdef(TEST).
 -export([decode/1]).
@@ -32,6 +33,9 @@ recv(Bin) ->
 
 send(Packet) ->
     etcpip_proc:cast(ipv6_writer, {send, Packet}).
+
+pseudo_header(#ipv6{src = Src, dst = Dst, next = Next}, Len) ->
+    <<Src/binary, Dst/binary, Len:32, 0:24, Next>>.
 
 %--- Reader --------------------------------------------------------------------
 
@@ -67,6 +71,7 @@ decode(<<6:4, Bin/bitstring>>) ->
         tclass = TClass,
         flow = Flow,
         plen = PLen,
+        next = Next,
         hlim = HLim,
         src = Src,
         dst = Dst
@@ -88,7 +93,12 @@ decode_headers(Packet, Type, <<Next, Len, Data/bitstring>>, Headers) ->
 
 encode(Packet) when is_record(Packet, ipv6) ->
     #ipv6{
-        tclass = TClass, flow = Flow, src = Src, hlim = HLim, dst = Dst, headers = Headers
+        tclass = TClass,
+        flow = Flow,
+        hlim = HLim,
+        src = Src,
+        dst = Dst,
+        headers = Headers
     } = Packet,
     {PLen, Next, Payload} = encode_headers(Headers),
     [<<
@@ -98,19 +108,22 @@ encode(Packet) when is_record(Packet, ipv6) ->
         PLen:16/big,
         Next,
         HLim,
-        Src:128/bitstring,
-        Dst:128/bitstring
+        Src:16/binary,
+        Dst:16/binary
     >>, Payload].
 
 encode_headers([])      -> {0, ?IP_PROTO_IPv6_NO_NEXT_HEADER, []};
 encode_headers([{Type, Data}|Headers]) ->
-    encode_headers(Headers, byte_size(Data), encode_type(Type), [Data]).
+    Bin = iolist_to_binary(Data),
+    Len = byte_size(Bin),
+    encode_headers(Headers, Len, encode_type(Type), [Bin]).
 
 encode_headers([], PLen, Next, Acc) ->
     {PLen, Next, Acc};
 encode_headers([{Type, Data}|Headers], PLen, Next, Acc) ->
-    Len = byte_size(Data),
-    encode_headers(Headers, PLen + Len + 2, encode_type(Type), [[Next, Len - 1, Data]|Acc]).
+    Bin = iolist_to_binary(Data),
+    Len = byte_size(Bin),
+    encode_headers(Headers, PLen + Len + 2, encode_type(Type), [[Next, Len - 1, Bin]|Acc]).
 
 encode_type(udp)                        -> ?IP_PROTO_UDP;
 encode_type(icmpv6)                     -> ?IP_PROTO_ICMPv6;

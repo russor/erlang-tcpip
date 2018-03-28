@@ -39,6 +39,7 @@
     tclass = 0,
     flow = 0,
     plen,
+    next,
     hlim = ?IP6_HOP_LIMIT,
     src,
     dst,
