@@ -23,6 +23,7 @@
 -define(ICMPV6_NEIGHBOR_ADVERTISEMENT, 136).
 
 -define(NS_SOURCE_LINK_LAYER_ADDR,     1).
+-define(NS_TARGET_LINK_LAYER_ADDR,     2).
 
 %--- API -----------------------------------------------------------------------
 
@@ -148,6 +149,8 @@ encode_ns_options(Opts) -> maps:fold(fun encode_ns_option/3, <<>>, Opts).
 
 encode_ns_option(source_link_layer_addr, Mac, Acc) ->
     <<?NS_SOURCE_LINK_LAYER_ADDR, 1, Mac:48/big, Acc/binary>>;
+encode_ns_option(target_link_layer_addr, Mac, Acc) ->
+    <<?NS_TARGET_LINK_LAYER_ADDR, 1, Mac:48/big, Acc/binary>>;
 encode_ns_option(Type, Value, Acc) when is_integer(Type) ->
     Size = (byte_size(Value) + 2) div 8,
     <<Type, Size, Value/binary, Acc/binary>>.
@@ -158,6 +161,8 @@ process(#ipv6{headers = [#icmpv6{type = echo_request}]} = Packet, {IP6, _}) ->
     send(#ipv6{
         src = IP6,
         dst = Src,
+        next = ?IP_PROTO_ICMPv6,
+        hlim = 16#FF,
         headers = [
             {icmpv6, #icmpv6{
                 type = echo_response,
@@ -177,7 +182,7 @@ process(#ipv6{headers = [#icmpv6{type = neighbor_solicitation, payload = {IP6, _
             {icmpv6, #icmpv6{
                 type = neighbor_advertisement,
                 code = 0,
-                payload = {IP6, #{source_link_layer_addr => Mac}}
+                payload = {IP6, #{target_link_layer_addr => Mac}}
             }}
         ]
     });
