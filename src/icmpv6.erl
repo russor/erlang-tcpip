@@ -172,7 +172,7 @@ process(#ipv6{headers = [#icmpv6{type = neighbor_solicitation, payload = {IP6, S
             {icmpv6, #icmpv6{
                 type = neighbor_advertisement,
                 code = 0,
-                payload = {IP6, #{target_link_layer_addr => Mac}}
+                payload = {IP6, 0, 1, 0, #{target_link_layer_addr => Mac}}
             }}
         ]
     });
