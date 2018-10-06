@@ -28,16 +28,19 @@
 -include("ip.hrl").
 
 -import(packet_check, [check_packet/4, compute_checksum/5]).
--export([parse/3, send_packet/2, send_packet/1, find_option/3]).
+-export([parse/4, send_packet/2, send_packet/1, find_option/3]).
 
 -define(DEFAULT_HDLEN, 5).
 
 %%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-parse(Src_Ip, Dst_Ip, Packet) ->
+parse(L3, Src_Ip, Dst_Ip, Packet) ->
     case check_packet(Src_Ip, Dst_Ip, ?IP_PROTO_TCP, Packet) of
 	ok ->
-	    parse_packet(Src_Ip, Dst_Ip, Packet);
+	    parse_packet(L3, Src_Ip, Dst_Ip, Packet);
+        {error, bad_checksum} ->
+            io:format("Ignoring checksum error for now...~n", []),
+            parse_packet(L3, Src_Ip, Dst_Ip, Packet);
 	{error, Error} ->
 	    {error, Error}
     end.
@@ -60,14 +63,25 @@ send_packet(Tcb, Type) ->
     end.
 
 send_packet(Pkt) ->
+    L3mod = Pkt#pkt.l3,
     {Packet, Len} = build_bin_packet(Pkt),
-    ip:send(Packet, Len, tcp, Pkt#pkt.dip).
+    case L3mod of
+        ipv6 ->
+            ipv6:send(#ipv6{ plen = Len
+                           , next = ?IP_PROTO_TCP
+                           , src = Pkt#pkt.sip
+                           , dst = Pkt#pkt.dip
+                           , headers = [{tcp, Packet}]
+                           });
+        ip ->
+            ip:send(Packet, Len, tcp, Pkt#pkt.dip)
+    end.
 
 %%%%%%%%%%%%%%%%%%%% PACKET PARSING %%%%%%%%%%%%%%%%%%%%
 
 %% Takes data from binary packet to a pkt record
 
-parse_packet(Src_Ip, Dst_Ip, Packet) ->
+parse_packet(L3, Src_Ip, Dst_Ip, Packet) ->
     <<SPort:16/big-integer,
       DPort:16/big-integer,
       Seq:32/big-integer,
@@ -86,6 +100,7 @@ parse_packet(Src_Ip, Dst_Ip, Packet) ->
       Rem/binary>> = Packet,
     {Options, Data} = get_options(Off, Rem),
     {ok, #pkt{
+      l3    = L3,
       sip   = Src_Ip,
       dip   = Dst_Ip,
       sport = SPort,
@@ -158,7 +173,17 @@ parse_options(<<Kind:8, Len:8/integer, Rem/binary>>, Acc) ->
 
 send_packet_1(Tcb, Pkt) ->
     {Bin_Packet, Len} = build_bin_packet(Tcb, Pkt),
-    ip:send(Bin_Packet, Len, tcp, Pkt#pkt.dip),
+    case Pkt#pkt.l3 of
+        ipv6 ->
+            ipv6:send(#ipv6{ plen = Len
+                           , next = ?IP_PROTO_TCP
+                           , src = Pkt#pkt.sip
+                           , dst = Pkt#pkt.dip
+                           , headers = [{tcp, Bin_Packet}]
+                           });
+        ip ->
+            ip:send(Bin_Packet, Len, tcp, Pkt#pkt.dip)
+    end,
     
     Seq_Len = size(Pkt#pkt.data)+Pkt#pkt.is_syn+Pkt#pkt.is_fin,
     prepare_retransmit(Tcb, Pkt#pkt.seq, Seq_Len, Pkt),
@@ -299,17 +324,18 @@ build_packet_1(Tcb, Type, Is_Ack, Is_Psh, Is_Rst, Is_Syn, Is_Fin) ->
     case Type of 
 	nodata ->
 	    {_, Snd_Nxt, _, _} = tcb:get_tcbdata(Tcb, snd),
-	    {Lc_Ip, Lc_Port, Rt_Ip, Rt_Port,
+	    {Lc_Ip, Lc_Port, Rt_Ip, Rt_Port, L3Mod,
 	     Rcv_Nxt, Rcv_Wnd} = tcb:get_tcbdata(Tcb, socket),
 	    Data = <<>>,
 	    Data_Size = 0,
 	    Data_Avail = 0;
 	data ->
 	    {Snd_Nxt, Data_Avail, Data, Data_Size, Lc_Ip, Lc_Port, Rt_Ip, 
-	     Rt_Port, Rcv_Nxt, Rcv_Wnd} = tcb:get_tcbdata(Tcb, sdata)
+	     Rt_Port, L3Mod, Rcv_Nxt, Rcv_Wnd} = tcb:get_tcbdata(Tcb, sdata)
     end,
     Pkt = #pkt{sip   = Lc_Ip,
 	       dip   = Rt_Ip,
+               l3    = L3Mod,
                sport = Lc_Port,
 	       dport = Rt_Port,
 	       seq   = Snd_Nxt,
@@ -330,12 +356,13 @@ build_packet_1(Tcb, Type, Is_Ack, Is_Psh, Is_Rst, Is_Syn, Is_Fin) ->
 
 retransmit(Tcb, Packet, Smss) when Packet#pkt.data_size =< Smss ->
     {Bin_Packet, Len} = build_bin_packet(Tcb, Packet),
-    ip:send(Bin_Packet, Len, tcp, Packet#pkt.dip);
+    ipv6:send(Bin_Packet, Len, tcp, Packet#pkt.dip);
 retransmit(Tcb,Packet, Smss) ->
+    L3Mod = Packet#pkt.l3,
     <<Data:Smss/binary, Rem/binary>> = Packet#pkt.data,
     Send_Packet= Packet#pkt{data = Data, data_size = Smss},
     
     {Bin_Packet, Len} = build_bin_packet(Tcb, Send_Packet),
-    ip:send(Bin_Packet, Len, tcp, Send_Packet#pkt.dip),
+    L3Mod:send(Bin_Packet, Len, tcp, Send_Packet#pkt.dip),
     retransmit(Tcb, Packet#pkt{seq = seq:add(Packet#pkt.seq,Smss), 
 			       data = Rem, data_size = size(Rem)}, Smss).   

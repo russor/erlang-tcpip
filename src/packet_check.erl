@@ -49,6 +49,21 @@ check_packet(Src_Ip, Dst_Ip, Protocol, Packet) ->
 	    {error, bad_checksum}
     end.
 
+build_checksum_packet(Src_Ip, Dst_Ip, Protocol, Packet, Len)
+    when is_binary(Src_Ip), is_binary(Dst_Ip) ->
+    Pad = case Len rem 4 of   % It must have even length
+	      0 -> % Even Length
+		  <<>>;
+	      N -> % Odd Length
+		  <<0:((4-N) * 8)/integer>>
+	  end,
+    [<<Src_Ip/binary,
+       Dst_Ip/binary,
+       Len:32/big-integer,
+       0:24/integer,
+       Protocol:8/integer>>,
+     Packet,
+     Pad];
 build_checksum_packet(Src_Ip, Dst_Ip, Protocol, Packet, Len) ->
     Pad = case Len rem 2 of   % It must have even length
 	      0 -> % Even Length

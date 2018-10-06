@@ -24,6 +24,7 @@
 
 
 -record(pkt, {
+              l3,      % Layer 3 type (ip or ipv6)
 	      sip,     % Source Ip
 	      dip,     % Destination Ip
 	      sport,   % Source Port

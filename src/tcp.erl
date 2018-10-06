@@ -24,7 +24,7 @@
 
 -module(tcp).
 
--export([start/0,start_link/0,recv/3,reader_init/0, new_mtu/3, dst_unr/3]).
+-export([start/0,start_link/0,recv/4,reader_init/0, new_mtu/4, dst_unr/4]).
 
 -include("tcp_packet.hrl").
 
@@ -34,14 +34,14 @@ start() ->
 start_link() ->
     {ok, spawn_link(tcp, reader_init, [])}.
 
-recv(Src_Ip, Dst_Ip, Data) ->
-    catch tcp_reader ! {recv, Src_Ip, Dst_Ip, Data}.
+recv(L3, Src_Ip, Dst_Ip, Data) ->
+    catch tcp_reader ! {recv, L3, Src_Ip, Dst_Ip, Data}.
 
-new_mtu(Src_Ip, Dst_Ip, Data) ->
-    catch tcp_reader ! {new_mtu, Src_Ip, Dst_Ip, Data}.
+new_mtu(L3, Src_Ip, Dst_Ip, Data) ->
+    catch tcp_reader ! {new_mtu, L3, Src_Ip, Dst_Ip, Data}.
 
-dst_unr(Src_Ip, Dst_Ip, Data) ->
-    catch tcp_reader ! {dst_unr, Src_Ip, Dst_Ip, Data}.
+dst_unr(L3, Src_Ip, Dst_Ip, Data) ->
+    catch tcp_reader ! {dst_unr, L3, Src_Ip, Dst_Ip, Data}.
 
 reader_init() ->
     register(tcp_reader, self()),
@@ -49,8 +49,8 @@ reader_init() ->
 
 reader_loop() ->
     receive
-	{recv, Src_Ip, Dst_Ip, Data} ->
-	    case catch tcp_packet:parse(Src_Ip, Dst_Ip, Data) of 
+	{recv, L3, Src_Ip, Dst_Ip, Data} ->
+	    case catch tcp_packet:parse(L3, Src_Ip, Dst_Ip, Data) of 
 		{ok, Pkt} ->
 		    demux_packet(Pkt);
 		{error, Error} -> % Bad checksum

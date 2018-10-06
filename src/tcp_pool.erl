@@ -72,7 +72,7 @@ loop(Ip) ->
 	{get, Socket, From} ->
 	    case catch ets:lookup_element(tcp_pool, Socket, 2) of
 		{'EXIT', _} ->
-		    From ! {tcp_pool, error, no_connection};
+                    find_listen(Socket, From);
 		Conn ->
 		    From ! {tcp_pool, ok, Socket, Conn}
 	    end;
@@ -82,16 +82,26 @@ loop(Ip) ->
 	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
 	    From ! {tcp_pool, ok, Ip, Lc_Port};
 	{add, local, Lc_Port, Conn, From} ->
-	    ets:insert(tcp_pool, {{Ip, Lc_Port}, Conn}),
+	    ets:insert(tcp_pool, {{inaddr_any, Lc_Port}, Conn}),
 	    From ! {tcp_pool, ok, Ip, Lc_Port};
-	{add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn, From} ->
-	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
-	    From ! {tcp_pool, ok, Ip, Lc_Port};
+	{add, connect, {Lc_Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn, From} ->
+	    ets:insert(tcp_pool, {{Lc_Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
+	    From ! {tcp_pool, ok, Lc_Ip, Lc_Port};
 	{remove, Socket} ->
             lists:foreach(fun(S) -> ets:delete_object(tcp_pool, S) end,
                           ets:match_object(tcp_pool, {'_', Socket}))
     end,
     loop(Ip).
+
+find_listen({_LocalIP, Port} = Socket, From) ->
+  case catch ets:lookup_element(tcp_pool, {inaddr_any, Port}, 2) of
+    {'EXIT', _} ->
+      From ! {tcp_pool, error, no_connection};
+    Conn ->
+      From ! {tcp_pool, ok, Socket, Conn}
+  end;
+find_listen(_, From) ->
+  From ! {tcp_pool, error, no_connection}.
 
 find_free_port(Lc_Ip, Rt_Ip, Rt_Port) ->
     find_free_port_1(Lc_Ip, Rt_Ip, Rt_Port, 1000).

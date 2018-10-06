@@ -101,6 +101,9 @@ init(closed, Rt_Ip, Rt_Port) ->
 
 loop(Tcb, Observers) ->
     receive 
+        {set, l3, Value, _From} ->
+            New_Tcb = set(Tcb, Observers, l3, Value),
+            loop(New_Tcb, Observers);
         {set, open_queue, Value, _From} ->
             {New_Tcb, New_Observers} = set(Tcb, Observers, open_queue, Value),
             loop(New_Tcb, New_Observers);
@@ -160,6 +163,7 @@ get(Tcb, _, socket, From) ->
     
     From ! {tcbdata, {Tcb#tcb.lc_ip, Tcb#tcb.lc_port,
 		      Tcb#tcb.rt_ip, Tcb#tcb.rt_port,
+                      Tcb#tcb.l3,
 		      Tcb#tcb.rcv_nxt, Tcb#tcb.rcv_wnd}},
     Tcb;
 get(Tcb, _, state, From) ->
@@ -191,6 +195,7 @@ get(Tcb, Observers, sdata, From) ->
     From ! {tcbdata, {Tcb#tcb.snd_nxt, Data_Avail, Data, size(Data),
 		      Tcb#tcb.lc_ip, Tcb#tcb.lc_port,
 		      Tcb#tcb.rt_ip, Tcb#tcb.rt_port,
+                      Tcb#tcb.l3,
 		      Tcb#tcb.rcv_nxt, Tcb#tcb.rcv_wnd}},
     New_Tcb;
 get(Tcb, _, sbufsize, From) ->
@@ -280,6 +285,9 @@ get(Tcb, _, {rfc2385_keys, IP}, From) ->
                         Tcb#tcb.rfc2385_keys),
     From ! {tcbdata, Keys},
     Tcb;
+get(Tcb, _, l3, From) ->
+    From ! {tcbdata, Tcb#tcb.l3},
+    Tcb;
 get(Tcb, _, open_queue, From) ->
     case queue:out_r(Tcb#tcb.open_queue) of
 	{empty, _} ->
@@ -302,6 +310,8 @@ set(Tcb, _, rsocket, Socket) ->
 set(Tcb, _, lsocket, Socket) ->
     {Lc_Ip, Lc_Port} = Socket,
     Tcb#tcb{lc_ip = Lc_Ip, lc_port = Lc_Port};
+set(Tcb, _, l3, L3) ->
+    Tcb#tcb{l3 = L3};
 set(Tcb, Observers, state, State) ->
     New_Tcb = Tcb#tcb{state = State},
     notify(New_Tcb, Observers, state),
