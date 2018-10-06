@@ -6,6 +6,10 @@
 -export([encode/1]).
 -export([decode/1]).
 
+-ifdef(TEST).
+-export([encode_icmp/1]).
+-endif.
+
 -include("ip.hrl").
 
 -define(ICMPV6_ECHO_REQUEST,           128).
@@ -76,8 +80,8 @@ decode_payload(neighbor_solicitation, Payload) ->
     <<_Reserved:32, TargetAddress:16/binary, Options/binary>> = Payload,
     {TargetAddress, decode_ns_options(Options, [])};
 decode_payload(neighbor_advertisement, Payload) ->
-    <<_R:1, _S:1, _O:1, _:29, Address:16/binary, Options/binary>> = Payload,
-    {Address, decode_ns_options(Options, [])};
+    <<R:1, S:1, O:1, _:29, Address:16/binary, Options/binary>> = Payload,
+    {Address, R, S, O, decode_ns_options(Options, [])};
 decode_payload(_Type, Payload) ->
     Payload.
 
@@ -124,10 +128,7 @@ encode_payload(echo_response, Payload) ->
     Payload;
 encode_payload(neighbor_solicitation, {<<Addr:16/binary>>, Opts}) ->
     <<0:32, Addr/binary, (encode_ns_options(Opts))/binary>>;
-encode_payload(neighbor_advertisement, {Addr, Opts}) ->
-    R = 0,
-    S = 1,
-    O = 1,
+encode_payload(neighbor_advertisement, {Addr, R, S, O, Opts}) ->
     <<R:1, S:1, O:1, 0:29, Addr:16/binary, (encode_ns_options(Opts))/binary>>;
 encode_payload(_Type, Payload) when is_binary(Payload) ->
     Payload.
@@ -175,7 +176,7 @@ process(#ipv6{headers = [#icmpv6{type = neighbor_solicitation, payload = {IP6, S
             }}
         ]
     });
-process(#ipv6{headers = [#icmpv6{type = neighbor_advertisement, payload = {Src6, Options}}|_]}, _) ->
+process(#ipv6{headers = [#icmpv6{type = neighbor_advertisement, payload = {Src6, _R, _S, _O, Options}}|_]}, _) ->
     nd:update_cache(Src6, mac_to_integer(maps:get(2, Options)));
 process(_Packet, _Message) ->
     drop.

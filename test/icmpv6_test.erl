@@ -4,7 +4,7 @@
 -include("ip.hrl").
 -include("test_utils.hrl").
 
--import(icmpv6, [decode/1, encode/1]).
+-import(icmpv6, [decode/1, encode_icmp/1]).
 
 %--- API -----------------------------------------------------------------------
 
@@ -14,7 +14,7 @@ encode_decode_test_() ->
             Packet = test_utils:strip_eth(Frame),
             #ipv6{headers = [{icmpv6, Data}|_]} = IPv6 = ipv6:decode(Packet),
             #ipv6{headers = [Decoded|_]} = icmpv6:decode(IPv6),
-            ?assertEqual(Data, iolist_to_binary(encode(Decoded)))
+            ?assertEqual(strip_csum(Data), iolist_to_binary(encode_icmp(Decoded)))
         end
     ).
 
@@ -23,3 +23,7 @@ encode_decode_test_() ->
 strip(Frame) ->
     #ipv6{headers = [{icmpv6, Data}|_]} = ipv6:decode(test_utils:strip_eth(Frame)),
     Data.
+
+strip_csum(Bin) ->
+    <<Prefix:16, _:16, Rest/binary>> = Bin,
+    <<Prefix:16, 0:16, Rest/binary>>.
