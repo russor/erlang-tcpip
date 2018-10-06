@@ -2,16 +2,9 @@
 
 % API
 -export([start_reader/2]).
--export([start_writer/0]).
--export([recv/1]).
+-export([recv/3]).
 -export([encode/1]).
 -export([decode/1]).
-
--record(icmpv6, {
-    type,
-    code,
-    payload
-}).
 
 -include("ip.hrl").
 
@@ -33,15 +26,11 @@ start_reader(IP6, Mac) ->
         handle_cast => fun reader_handle_cast/2
     }).
 
-start_writer() ->
-    etcpip_proc:start_link(icmpv6_writer, #{
-        init        => fun() -> undefined end,
-        handle_cast => fun writer_handle_cast/2
-    }).
+recv(SrcMac, _DstMac, Packet) ->
+    etcpip_proc:cast(icmpv6_reader, {recv, Packet#ipv6{src_mac = SrcMac}}).
 
-recv(Packet) -> etcpip_proc:cast(icmpv6_reader, {recv, Packet}).
-
-send(Packet) -> etcpip_proc:cast(icmpv6_writer, {send, Packet}).
+send(Packet) ->
+    nd:send(encode(Packet)).
 
 %--- Reader --------------------------------------------------------------------
 
@@ -49,11 +38,6 @@ reader_handle_cast({recv, Packet}, State) ->
     process(decode(Packet), State),
     {noreply, State}.
 
-%--- Writer --------------------------------------------------------------------
-
-writer_handle_cast({send, Packet}, State) ->
-    ipv6:send(encode(Packet)),
-    {noreply, State}.
 
 %--- Internal ------------------------------------------------------------------
 
@@ -91,6 +75,9 @@ decode_type(Unknown)                        -> Unknown.
 decode_payload(neighbor_solicitation, Payload) ->
     <<_Reserved:32, TargetAddress:16/binary, Options/binary>> = Payload,
     {TargetAddress, decode_ns_options(Options, [])};
+decode_payload(neighbor_advertisement, Payload) ->
+    <<_R:1, _S:1, _O:1, _:29, Address:16/binary, Options/binary>> = Payload,
+    {Address, decode_ns_options(Options, [])};
 decode_payload(_Type, Payload) ->
     Payload.
 
@@ -136,7 +123,7 @@ encode_type(Type) when is_integer(Type) -> Type.
 encode_payload(echo_response, Payload) ->
     Payload;
 encode_payload(neighbor_solicitation, {<<Addr:16/binary>>, Opts}) ->
-    <<0:32, Addr, (encode_ns_options(Opts))/binary>>;
+    <<0:32, Addr/binary, (encode_ns_options(Opts))/binary>>;
 encode_payload(neighbor_advertisement, {Addr, Opts}) ->
     R = 0,
     S = 1,
@@ -171,11 +158,13 @@ process(#ipv6{headers = [#icmpv6{type = echo_request}]} = Packet, {IP6, _}) ->
             }}
         ]
     });
-process(#ipv6{headers = [#icmpv6{type = neighbor_solicitation, payload = {IP6, _}}|_]} = Packet, {IP6, Mac}) ->
+process(#ipv6{headers = [#icmpv6{type = neighbor_solicitation, payload = {IP6, SrcMac}}|_]} = Packet, {IP6, Mac}) ->
     #ipv6{src = Src} = Packet,
     send(#ipv6{
         src = IP6,
         dst = Src,
+        src_mac = Mac,
+        dst_mac = mac_to_integer(maps:get(1, SrcMac)),
         next = ?IP_PROTO_ICMPv6,
         hlim = 16#FF,
         headers = [
@@ -186,5 +175,9 @@ process(#ipv6{headers = [#icmpv6{type = neighbor_solicitation, payload = {IP6, _
             }}
         ]
     });
+process(#ipv6{headers = [#icmpv6{type = neighbor_advertisement, payload = {Src6, Options}}|_]}, _) ->
+    nd:update_cache(Src6, mac_to_integer(maps:get(2, Options)));
 process(_Packet, _Message) ->
     drop.
+
+mac_to_integer(<<E:48>>) -> E.

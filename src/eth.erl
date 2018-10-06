@@ -55,7 +55,7 @@ get_mtu() -> eth_port:get_mtu().
 
 reader_handle_cast({recv, Packet}, Mac) ->
     case decode(Packet, Mac) of
-        {ok, Protocol, Data} -> Protocol:recv(Data);
+        {ok, {SrcMac, DstMac, Protocol}, Data} -> Protocol:recv(SrcMac, DstMac, Data);
         ignore               -> ok
     end,
     {noreply, Mac}.
@@ -72,12 +72,12 @@ encode(DstMac, SrcMac, Protocol, Payload) ->
     EthProtocol = encode_protocol(Protocol),
     [<<DstMac:48/big, SrcMac:48/big, EthProtocol:16/big>>, Payload].
 
-decode(<<_Mac:48/big, _Src:48/big, ?ETH_IPV6:16/big, Data/binary>>, _) ->
-    {ok, decode_protocol(?ETH_IPV6), Data};
-decode(<<Mac:48/big, _Src:48/big, Protocol:16/big, Data/binary>>, Mac)  ->
-    {ok, decode_protocol(Protocol), Data};
-decode(<<?ETH_BROAD:48/big, _Src:48/big, Protocol:16/big, Data/binary>>, _Mac) ->
-    {ok, decode_protocol(Protocol), Data};
+decode(<<DstMac:48/big, SrcMac:48/big, ?ETH_IPV6:16/big, Data/binary>>, _) ->
+    {ok, {SrcMac, DstMac, decode_protocol(?ETH_IPV6)}, Data};
+decode(<<DstMac:48/big, SrcMac:48/big, Protocol:16/big, Data/binary>>, _Mac)  ->
+    {ok, {SrcMac, DstMac, decode_protocol(Protocol)}, Data};
+decode(<<?ETH_BROAD:48/big, SrcMac:48/big, Protocol:16/big, Data/binary>>, _Mac) ->
+    {ok, {SrcMac, ?ETH_BROAD, decode_protocol(Protocol)}, Data};
 decode(_Packet, _Mac) ->
     ignore.
 

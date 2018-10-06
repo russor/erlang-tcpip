@@ -97,10 +97,9 @@ init([]) ->
         #{id => tcp_sup,      start => {tcp_sup, start_link, []}},
 
         % IPv6
+        #{id => nd_sup,        start => {nd_sup, start_link, [IP6, Mac]}},             
         #{id => ipv6_reader,   start => {ipv6, start_reader, []}},
-        #{id => ipv6_writer,   start => {ipv6, start_writer, []}},
-        #{id => icmpv6_reader, start => {icmpv6, start_reader, [IP6, Mac]}},
-        #{id => icmpv6_writer, start => {icmpv6, start_writer, []}}
+        #{id => icmpv6_reader, start => {icmpv6, start_reader, [IP6, Mac]}}
     ]}}.
 
 %%%===================================================================

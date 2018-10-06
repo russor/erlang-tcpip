@@ -24,7 +24,7 @@
 
 -module(arp).
 
--export([start/2, start_reader/2, start_writer/2, start_ip_queue/2, init_reader/2, init_writer/2, ip_queue_init/2, send/2, answer/2, solve/1, recv/1,
+-export([start/2, start_reader/2, start_writer/2, start_ip_queue/2, init_reader/2, init_writer/2, ip_queue_init/2, send/2, answer/2, solve/1, recv/3,
          get_mtu/0]).
 
 -include("eth.hrl").
@@ -66,7 +66,7 @@ solve(Ip_Addr) ->
     arp_writer ! {solve, Ip_Addr}.
 
 % Received an arp packet
-recv(Packet) ->    
+recv(_SrcMac, _DstMac, Packet) ->    
     catch arp_reader ! Packet.
 
 get_mtu() ->

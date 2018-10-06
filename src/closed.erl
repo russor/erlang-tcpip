@@ -40,7 +40,8 @@ recv(Pkt) -> % Should build a fake tcb instead ?
 			  Pkt#pkt.ack
 		  end,
 	    Ack = seq:add(Pkt#pkt.seq, size(Pkt#pkt.data) + 1),
-	    rst(Pkt#pkt.dip, Pkt#pkt.dport, Pkt#pkt.sip, 
+	    rst(Pkt#pkt.l3,
+                Pkt#pkt.dip, Pkt#pkt.dport, Pkt#pkt.sip, 
 		Pkt#pkt.sport, Seq, Ack)
     end.
 
@@ -50,8 +51,9 @@ send(Tcb, {send, syn}) ->
 send(_, _) ->
     {error, unknown_message}.
 
-rst(Src_Ip, SPort, Dst_Ip, DPort, Seq, Ack) ->
+rst(L3, Src_Ip, SPort, Dst_Ip, DPort, Seq, Ack) ->
     Pkt = #pkt{
+      l3    = L3,
       sip   = Src_Ip,
       dip   = Dst_Ip,
       sport = SPort,

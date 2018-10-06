@@ -25,7 +25,7 @@
 -module(ip).
 
 -import(checksum,[checksum/1, checksum_1/1]).
--export([start/4,start_writer/4,start_reader/2,init_reader/2,init_writer/4,recv/1,send/4, fragment/4,
+-export([start/4,start_writer/4,start_reader/2,init_reader/2,init_writer/4,recv/3,send/4, fragment/4,
 	 change_mtu/2, dst_unreachable/1, get_mtu/0]).
 
 -include("ip.hrl").
@@ -44,7 +44,7 @@ start_writer(Ip_Addr, NetMask, Default_Gateway, Module) ->
 start_reader(Ip_Addr, NetMask) ->
     {ok, spawn_link(ip, init_reader, [Ip_Addr, NetMask])}.
 
-recv(Packet) ->
+recv(_SrcMac, _DstMac, Packet) ->
     catch ip_reader ! {recv, Packet}.
 
 fragment(Frg_Id, Src_Ip, Protocol, Data) ->  % Completed fragmented packet
@@ -293,7 +293,7 @@ delete_fragment(Frg_Id, Src_Ip) ->
     catch ets:delete(ip_fragment, {Src_Ip, Frg_Id}).
 
 pop(Type, tcp, Src_Ip, Ip_Addr, Data) ->
-    tcp:Type(Src_Ip, Ip_Addr, Data);
+    tcp:Type(ip, Src_Ip, Ip_Addr, Data);
 pop(Type, udp, Src_Ip, Ip_Addr, Data) ->
     udp:Type(Src_Ip, Ip_Addr, Data);
 pop(Type, icmp, Src_Ip, _Ip_Addr, Data) ->

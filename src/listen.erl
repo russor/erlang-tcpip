@@ -55,14 +55,16 @@ process_syn(Tcb, Pkt, _Writer) ->
               fun(IV) -> tcb:set_tcbdata(N_Tcb, rfc2385_key, IV) end,
               Keys),
 	    tcb:syncset_tcbdata(Tcb, syn_queue, {N_Tcb, N_Reader, N_Writer}),
-	    
+
 	    tcb:set_tcbdata(N_Tcb, rsocket, {Pkt#pkt.sip, Pkt#pkt.sport}),
+            tcb:set_tcbdata(N_Tcb, lsocket, {Pkt#pkt.dip, Pkt#pkt.dport}),
 	    tcb:set_tcbdata(N_Tcb, rcv_nxt, seq:add(Pkt#pkt.seq, 1)),
 	    tcb:set_tcbdata(N_Tcb, irs, Pkt#pkt.seq),
+            tcb:set_tcbdata(N_Tcb, l3, Pkt#pkt.l3),
 	    tcb:syncset_tcbdata(N_Tcb, state, syn_rcvd),
-	    Socket = {Pkt#pkt.dip, Pkt#pkt.dport, 
+	    Socket = {Pkt#pkt.dip, Pkt#pkt.dport,
 		      Pkt#pkt.sip, Pkt#pkt.sport},
-	
+
 	    tcp_pool:add({connect, Socket}, {N_Tcb, N_Reader, N_Writer}),
 	    tcp_con:send_packet(N_Writer, synack);
 	0 ->

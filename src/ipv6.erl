@@ -2,14 +2,13 @@
 
 % API
 -export([start_reader/0]).
--export([start_writer/0]).
--export([recv/1]).
+-export([recv/3]).
 -export([send/1]).
 -export([pseudo_header/2]).
+-export([encode/1]).
 
 -ifdef(TEST).
 -export([decode/1]).
--export([encode/1]).
 -endif.
 
 -include("ip.hrl").
@@ -22,36 +21,26 @@ start_reader() ->
         handle_cast => fun reader_handle_cast/2
     }).
 
-start_writer() ->
-    etcpip_proc:start_link(ipv6_writer, #{
-        init        => fun() -> undefined end,
-        handle_cast => fun writer_handle_cast/2
-    }).
-
-recv(Bin) ->
-    etcpip_proc:cast(ipv6_reader, {recv, Bin}).
+recv(SrcMac, DstMac, Bin) ->
+    etcpip_proc:cast(ipv6_reader, {recv, SrcMac, DstMac, Bin}).
 
 send(Packet) ->
-    etcpip_proc:cast(ipv6_writer, {send, Packet}).
+    nd:send(Packet).
 
 pseudo_header(#ipv6{src = Src, dst = Dst, next = Next}, Len) ->
     <<Src/binary, Dst/binary, Len:32, 0:24, Next>>.
 
 %--- Reader --------------------------------------------------------------------
 
-reader_handle_cast({recv, Data}, State) ->
+reader_handle_cast({recv, SrcMac, DstMac, Data}, State) ->
     case decode(Data) of
         Packet = #ipv6{headers = [{Protocol = icmpv6, _Payload}|_]} ->
-            Protocol:recv(Packet);
+            Protocol:recv(SrcMac, DstMac, Packet);
+        #ipv6{src = Src, dst = Dst, headers = [{tcp, TcpData}|_]} ->
+            tcp:recv(ipv6, Src, Dst, TcpData);
         _Drop ->
             ok
     end,
-    {noreply, State}.
-
-%--- Writer --------------------------------------------------------------------
-
-writer_handle_cast({send, Packet}, State) ->
-    eth:send(encode(Packet), ipv6, 95536995356), % TODO: Resolve destination address!
     {noreply, State}.
 
 %--- Internal ------------------------------------------------------------------
@@ -127,4 +116,5 @@ encode_headers([{Type, Data}|Headers], PLen, Next, Acc) ->
 
 encode_type(udp)                        -> ?IP_PROTO_UDP;
 encode_type(icmpv6)                     -> ?IP_PROTO_ICMPv6;
+encode_type(tcp)                        -> ?IP_PROTO_TCP;
 encode_type(Type) when is_integer(Type) -> Type.

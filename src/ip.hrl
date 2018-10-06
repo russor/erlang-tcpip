@@ -44,6 +44,12 @@
     src,
     dst,
     src_mac,
-    dst_mac,
+    dst_mac = undef,
     headers = []
+}).
+
+-record(icmpv6, {
+    type,
+    code,
+    payload
 }).

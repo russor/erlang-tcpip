@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% @doc ARP supervisor.
+%%% @doc IPv6 Neighbor Discovery supervisor.
 %%%
 %%% License:
 %%% This code is licensed to you under the Apache License, Version 2.0
@@ -17,7 +17,7 @@
 %%%
 %%% @end
 %%%-------------------------------------------------------------------
--module(arp_sup).
+-module(nd_sup).
 
 -behaviour(supervisor).
 
@@ -45,11 +45,10 @@ init([Ip, Mac]) ->
         period    => 5
     },
     % FIXME: Proper owner of ETS table (not the supervisor!)
-    ets:new(arp_cache, [set, public, named_table]),
-    {ok, {SupFlags, [
-        #{id => reader,   start => {arp, start_reader, [Ip, Mac]}},
-        #{id => writer,   start => {arp, start_writer, [Ip, Mac]}},
-        #{id => ip_queue, start => {arp, start_ip_queue, [Ip, Mac]}}
+    ets:new(nd_cache, [set, public, named_table]),
+    {ok, {SupFlags,
+          [ #{id => nd_handler, start => {nd, start_resolver, [Ip, Mac]}}
+          , #{id => nd_queue,   start => {nd, start_ipv6_queue, [Ip, Mac]}}
     ]}}.
 
 %%%===================================================================
