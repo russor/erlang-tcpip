@@ -18,6 +18,7 @@
 -define(ICMPV6_ROUTER_ADVERTISEMENT,   134).
 -define(ICMPV6_NEIGHBOR_SOLICITATION,  135).
 -define(ICMPV6_NEIGHBOR_ADVERTISEMENT, 136).
+-define(ICMPV6_LOCATOR_UPDATE,         156).
 
 -define(NS_SOURCE_LINK_LAYER_ADDR,     1).
 -define(NS_TARGET_LINK_LAYER_ADDR,     2).
@@ -51,7 +52,8 @@ decode(#ipv6{next = _Next, headers = [{icmpv6, Payload}|Headers]} = Packet) ->
     {Checksum, Decoded} = decode_icmp(Payload),
     <<Type, Code, _Checksum:16, Data/binary>> = Payload,
     WOChecksum = <<Type, Code, 0, 0, Data/binary>>,
-    Checksum = checksum:checksum_1([
+    %% Checksum = checksum:checksum_1([
+    checksum:checksum_1([
         Packet#ipv6.src,
         Packet#ipv6.dst,
         <<(Packet#ipv6.plen):32/big>>,
@@ -74,6 +76,7 @@ decode_type(?ICMPV6_NEIGHBOR_SOLICITATION)  -> neighbor_solicitation;
 decode_type(?ICMPV6_NEIGHBOR_ADVERTISEMENT) -> neighbor_advertisement;
 decode_type(?ICMPV6_ECHO_REQUEST)           -> echo_request;
 decode_type(?ICMPV6_ECHO_RESPONSE)          -> echo_response;
+decode_type(?ICMPV6_LOCATOR_UPDATE)         -> locator_update;
 decode_type(Unknown)                        -> Unknown.
 
 decode_payload(neighbor_solicitation, Payload) ->
@@ -82,6 +85,11 @@ decode_payload(neighbor_solicitation, Payload) ->
 decode_payload(neighbor_advertisement, Payload) ->
     <<R:1, S:1, O:1, _:29, Address:16/binary, Options/binary>> = Payload,
     {Address, R, S, O, decode_ns_options(Options, [])};
+decode_payload(locator_update, Payload) ->
+    <<_Count:8, Operation:8, _R:16, Locators/binary>> = Payload,
+    {decode_lu_operation(Operation),
+     [ {Locator, Preference, Lifetime} || <<Locator:64, Preference:16, Lifetime:16>> <= Locators ]
+    };
 decode_payload(_Type, Payload) ->
     Payload.
 
@@ -96,6 +104,9 @@ decode_ns_option(?NS_SOURCE_LINK_LAYER_ADDR, <<Addr:6>>) ->
     {source_link_layer_addr, Addr};
 decode_ns_option(Type, Value) ->
     {Type, Value}.
+
+decode_lu_operation(1) -> advert;
+decode_lu_operation(2) -> ack.
 
 % Encode
 
@@ -122,6 +133,7 @@ encode_type(neighbor_solicitation)      -> ?ICMPV6_NEIGHBOR_SOLICITATION;
 encode_type(neighbor_advertisement)     -> ?ICMPV6_NEIGHBOR_ADVERTISEMENT;
 encode_type(echo_request)               -> ?ICMPV6_ECHO_REQUEST;
 encode_type(echo_response)              -> ?ICMPV6_ECHO_RESPONSE;
+encode_type(locator_update)             -> ?ICMPV6_LOCATOR_UPDATE;
 encode_type(Type) when is_integer(Type) -> Type.
 
 encode_payload(echo_response, Payload) ->
@@ -130,6 +142,10 @@ encode_payload(neighbor_solicitation, {<<Addr:16/binary>>, Opts}) ->
     <<0:32, Addr/binary, (encode_ns_options(Opts))/binary>>;
 encode_payload(neighbor_advertisement, {Addr, R, S, O, Opts}) ->
     <<R:1, S:1, O:1, 0:29, Addr:16/binary, (encode_ns_options(Opts))/binary>>;
+encode_payload(locator_update, {Operation, Locators}) ->
+    LocatorPayload = << <<Locator:64, Preference:16, Lifetime:16>> || {Locator, Preference, Lifetime} <- Locators >>,
+    OperationPayload = encode_lu_operation(Operation),
+    <<(length(Locators)):8, OperationPayload:8, 0:16, LocatorPayload/binary>>;
 encode_payload(_Type, Payload) when is_binary(Payload) ->
     Payload.
 
@@ -142,6 +158,10 @@ encode_ns_option(target_link_layer_addr, Mac, Acc) ->
 encode_ns_option(Type, Value, Acc) when is_integer(Type) ->
     Size = (byte_size(Value) + 2) div 8,
     <<Type, Size, Value/binary, Acc/binary>>.
+
+encode_lu_operation(advert) -> 1;
+encode_lu_operation(ack)    -> 2.
+
 
 process(#ipv6{headers = [#icmpv6{type = echo_request}]} = Packet, {IP6, _}) ->
     #ipv6{src = Src, headers = [ICMPV6|_]} = Packet,
@@ -178,6 +198,22 @@ process(#ipv6{headers = [#icmpv6{type = neighbor_solicitation, payload = {IP6, S
     });
 process(#ipv6{headers = [#icmpv6{type = neighbor_advertisement, payload = {Src6, _R, _S, _O, Options}}|_]}, _) ->
     nd:update_cache(Src6, mac_to_integer(maps:get(2, Options)));
+
+process(#ipv6{src = Src,
+              headers = [#icmpv6{type = locator_update, payload = {advert, Locators}}|_]
+             } = Packet, {IP6, Mac}) ->
+    %% Update ILCC (communication cache)
+    %% Ack the update...
+    send(#ipv6{
+            src = IP6,
+            dst = Src,
+            next = ?IP_PROTO_ICMPv6,
+            hlim = 16#ff,
+            headers = [
+                       {icmpv6, #icmpv6{type = locator_update, payload = {ack, Locators}}}
+                      ]
+           });
+
 process(_Packet, _Message) ->
     drop.
 

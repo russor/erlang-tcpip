@@ -30,8 +30,12 @@
 
 %--- IPv6 ----------------------------------------------------------------------
 
+-define(IPV6_DESTINATION_OPTIONS,     60).
+
 -define(IP_PROTO_ICMPv6,              58).
 -define(IP_PROTO_IPv6_NO_NEXT_HEADER, 59).
+
+-define(IP6_ILNP_NONCE, 139).
 
 -define(IP6_HOP_LIMIT, 64). % TODO: Make configurable
 

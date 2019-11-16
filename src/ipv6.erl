@@ -65,8 +65,15 @@ decode(<<6:4, Bin/bitstring>>) ->
         src = Src,
         dst = Dst
     },
+    %% io:format("Next: ~p, Data: ~p~n", [Next, Data]),
     decode_headers(Decoded, Next, Data, []).
 
+decode_headers(Packet, ?IPV6_DESTINATION_OPTIONS,
+               <<Next, Len, ?IP6_ILNP_NONCE, 4, Nonce:4/binary, Rest/binary>>, Headers) ->
+    decode_headers(Packet, Next, Rest, [{ilnp_nonce, Nonce}|Headers]);
+decode_headers(Packet, ?IPV6_DESTINATION_OPTIONS,
+               <<Next, Len, ?IP6_ILNP_NONCE, 12, Nonce:12/binary, Rest/binary>>, Headers) ->
+    decode_headers(Packet, Next, Rest, [{ilnp_nonce, Nonce}|Headers]);
 decode_headers(Packet, ?IP_PROTO_ICMPv6, Data, Headers) ->
     Packet#ipv6{headers = [{icmpv6, Data}|Headers]};
 decode_headers(Packet, ?IP_PROTO_IPv6_NO_NEXT_HEADER, _Data, Headers) ->
@@ -109,11 +116,15 @@ encode_headers([{Type, Data}|Headers]) ->
 
 encode_headers([], PLen, Next, Acc) ->
     {PLen, Next, Acc};
+encode_headers([{ilnp_nonce, Nonce}|Headers], PLen, Next, Acc) ->
+    Len = byte_size(Nonce),
+    encode_headers(Headers, PLen + Len + 2, encode_type(ilnp_nonce), [[Next, Len - 1, Nonce] | Acc]);
 encode_headers([{Type, Data}|Headers], PLen, Next, Acc) ->
     Bin = iolist_to_binary(Data),
     Len = byte_size(Bin),
     encode_headers(Headers, PLen + Len + 2, encode_type(Type), [[Next, Len - 1, Bin]|Acc]).
 
+encode_type(ilnp_nonce)                 -> ?IP6_ILNP_NONCE;
 encode_type(udp)                        -> ?IP_PROTO_UDP;
 encode_type(icmpv6)                     -> ?IP_PROTO_ICMPv6;
 encode_type(tcp)                        -> ?IP_PROTO_TCP;
