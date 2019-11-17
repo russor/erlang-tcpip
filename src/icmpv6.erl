@@ -88,7 +88,7 @@ decode_payload(neighbor_advertisement, Payload) ->
 decode_payload(locator_update, Payload) ->
     <<_Count:8, Operation:8, _R:16, Locators/binary>> = Payload,
     {decode_lu_operation(Operation),
-     [ {Locator, Preference, Lifetime} || <<Locator:64, Preference:16, Lifetime:16>> <= Locators ]
+     [ {Locator, Preference, Lifetime} || <<Locator:64, Preference:32, Lifetime:32>> <= Locators ]
     };
 decode_payload(_Type, Payload) ->
     Payload.
@@ -143,7 +143,7 @@ encode_payload(neighbor_solicitation, {<<Addr:16/binary>>, Opts}) ->
 encode_payload(neighbor_advertisement, {Addr, R, S, O, Opts}) ->
     <<R:1, S:1, O:1, 0:29, Addr:16/binary, (encode_ns_options(Opts))/binary>>;
 encode_payload(locator_update, {Operation, Locators}) ->
-    LocatorPayload = << <<Locator:64, Preference:16, Lifetime:16>> || {Locator, Preference, Lifetime} <- Locators >>,
+    LocatorPayload = << <<Locator:64, Preference:32, Lifetime:32>> || {Locator, Preference, Lifetime} <- Locators >>,
     OperationPayload = encode_lu_operation(Operation),
     <<(length(Locators)):8, OperationPayload:8, 0:16, LocatorPayload/binary>>;
 encode_payload(_Type, Payload) when is_binary(Payload) ->
