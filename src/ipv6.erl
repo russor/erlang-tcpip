@@ -77,7 +77,7 @@ decode_headers(Packet, ?IPV6_DESTINATION_OPTIONS,
 decode_headers(Packet, ?IP_PROTO_ICMPv6, Data, Headers) ->
     Packet#ipv6{headers = [{icmpv6, Data}|Headers]};
 decode_headers(Packet, ?IP_PROTO_IPv6_NO_NEXT_HEADER, _Data, Headers) ->
-    Packet#ipv6{headers = Headers};
+    Packet#ipv6{headers = lists:reverse(Headers)};
 decode_headers(Packet, ?IP_PROTO_TCP, Data, Headers) ->
     Packet#ipv6{headers = [{tcp, Data}|Headers]};
 decode_headers(Packet, ?IP_PROTO_UDP, Data, Headers) ->
@@ -118,13 +118,13 @@ encode_headers([], PLen, Next, Acc) ->
     {PLen, Next, Acc};
 encode_headers([{ilnp_nonce, Nonce}|Headers], PLen, Next, Acc) ->
     Len = byte_size(Nonce),
-    encode_headers(Headers, PLen + Len + 2, encode_type(ilnp_nonce), [[Next, Len - 1, Nonce] | Acc]);
+    encode_headers(Headers, PLen + Len + 4, ?IPV6_DESTINATION_OPTIONS,
+                   [[Next, 0, ?IP6_ILNP_NONCE, Len, Nonce] | Acc]);
 encode_headers([{Type, Data}|Headers], PLen, Next, Acc) ->
     Bin = iolist_to_binary(Data),
     Len = byte_size(Bin),
     encode_headers(Headers, PLen + Len + 2, encode_type(Type), [[Next, Len - 1, Bin]|Acc]).
 
-encode_type(ilnp_nonce)                 -> ?IP6_ILNP_NONCE;
 encode_type(udp)                        -> ?IP_PROTO_UDP;
 encode_type(icmpv6)                     -> ?IP_PROTO_ICMPv6;
 encode_type(tcp)                        -> ?IP_PROTO_TCP;
