@@ -26,8 +26,8 @@
 static ErlDrvData chk_start(ErlDrvPort port, char *buff);
 static void chk_stop(ErlDrvData drv_data);
 static void chk_outputv(ErlDrvData drv_data, ErlIOVec *ev);
-static int chk_control(ErlDrvData drv_data, unsigned int command, 
-		       unsigned char *buf, int len, char **rbuf, int rlen);
+static ErlDrvSSizeT chk_control(ErlDrvData drv_data, unsigned int command,
+		       char *buf, ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen);
 
 
 static ErlDrvEntry checksum_driver_entry = {
@@ -77,8 +77,8 @@ static void chk_stop(ErlDrvData drv_data)
   free((ErlDrvPort *) drv_data);
 }
 
-static int chk_control(ErlDrvData drv_data, unsigned int command, 
-		       unsigned char *buf, int len, char **rbuf, int rlen)
+static ErlDrvSSizeT chk_control(ErlDrvData drv_data, unsigned int command,
+		       char *buf, ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen)
 {
   int i;
   unsigned int acc=0;
