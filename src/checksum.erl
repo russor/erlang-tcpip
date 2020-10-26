@@ -53,7 +53,11 @@ start_link() ->
 %% code:priv_dir work. The build tool rebar3 does that for one, 
 %% thus we default to using that!
 init({Parent,Ref}) ->
-    ok = erl_ddll:load_driver(code:priv_dir(etcpip), "checksum"),
+    Dir = case code:priv_dir(ectpip) of
+      {error, bad_name} -> "/obj";
+      Other -> Other
+    end,
+    ok = erl_ddll:load_driver(Dir, "checksum"),
     Port = open_port({spawn, checksum}, [binary]),
     register(checksum, self()),
     Parent ! {Ref, started},
