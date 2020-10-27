@@ -82,13 +82,14 @@ static ErlDrvSSizeT chk_control(ErlDrvData drv_data, unsigned int command,
 {
   int i;
   unsigned int acc=0;
+  unsigned char *ubuf = (unsigned char *) buf;
 
   for(i=0; (i+1)<len; i+=2) {
-    acc += (buf[i] << 8) + buf[i+1];
+    acc += (ubuf[i] << 8) + ubuf[i+1];
   }
 
   if((i+1)==len) {
-    acc += buf[i] << 8;
+    acc += ubuf[i] << 8;
   }
 
   while(acc > INT16) {
@@ -107,10 +108,10 @@ static void chk_outputv(ErlDrvData drv_data, ErlIOVec *ev)
 {
   SysIOVec *iov = ev->iov;
   int i, j, size, acc=0, odd=0;
-  char *buffer;
+  unsigned char *buffer;
 
   for(i=0; i<(ev->vsize); i++) {
-    buffer = iov[i].iov_base;
+    buffer = (unsigned char *)iov[i].iov_base;
     size = iov[i].iov_len;
 
     if(odd) {
