@@ -127,7 +127,7 @@ loop(Tcb, Observers) ->
 	    cancel_timers(Tcb),
 	    set(Tcb, Observers, state, closed),
             notify(Tcb, Observers, closed),
-            lists:foreach(fun(S) -> socket:close(S) end,
+            lists:foreach(fun(S) -> etcpip_socket:close(S) end,
                           queue:to_list(Tcb#tcb.open_queue)),
 	    exit(Tcb#tcb.writer, normal),
 	    exit(Tcb#tcb.reader, normal);
@@ -366,13 +366,13 @@ set(Tcb, _, snd_una, Snd_Una) ->
 				         Tcb#tcb.snd_una, Tcb#tcb.smss,
 				         Tcb#tcb.cwnd,    Tcb#tcb.ssthr),
     {Rttimer, RtSeq, Rto, Srtt, Rttvar} = 
-	rtt:check_rttimer(Tcb#tcb.rtseq, Tcb#tcb.rtcount, Tcb#tcb.rttimer, 
+	etcpip_rtt:check_rttimer(Tcb#tcb.rtseq, Tcb#tcb.rtcount, Tcb#tcb.rttimer,
 			  Tcb#tcb.srtt, Tcb#tcb.rttvar, Tcb#tcb.rto, Snd_Una),
     Tcb#tcb{snd_una = Snd_Una, rqueue = Queue, rtimer=Timer,
 	    rtcount = 0, cwnd = Cwnd, ssthr = Ssthr, rttimer = Rttimer, 
 	    rtseq = RtSeq, rto = Rto, srtt = Srtt, rttvar = Rttvar};
 set(Tcb, _, snd_nxt, Inc) ->
-    {Timer, Seq} = rtt:set_rttimer(Tcb#tcb.rttimer, Tcb#tcb.snd_nxt, 
+    {Timer, Seq} = etcpip_rtt:set_rttimer(Tcb#tcb.rttimer, Tcb#tcb.snd_nxt,
 				   Tcb#tcb.rtseq),
     Tcb#tcb{snd_nxt = seq:add(Tcb#tcb.snd_nxt, Inc),
 	    rttimer = Timer, rtseq = Seq};

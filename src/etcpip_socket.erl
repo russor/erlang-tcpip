@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : socket.erl
+%%% File    : etcpip_socket.erl
 %%% Author  : Javier Paris Fernandez <javier.paris@udc.es>
 %%% Description : Socket interface for Tcp/Ip
 %%%
@@ -22,7 +22,7 @@
 %%%
 %%%-------------------------------------------------------------------
 
--module(socket).
+-module(etcpip_socket).
 
 -export([start/0, start/2, start_ip/1, open/3, open/4, listen/1, accept/1, recv/2, send/2,
 	 send/4, close/1, string_to_ip/1,

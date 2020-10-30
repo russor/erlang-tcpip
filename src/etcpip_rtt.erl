@@ -1,5 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% File    : rtt.erl
+%%% File    : etcpip_rtt.erl
 %%% Author  : Javier Paris Fernandez <javier.paris@udc.es>
 %%% Description : Round trip time and retransmition timeout estimation
 %%%
@@ -22,7 +22,7 @@
 %%%
 %%%-------------------------------------------------------------------
 
--module(rtt).
+-module(etcpip_rtt).
 
 -export([check_rttimer/7, set_rttimer/3]).
 
