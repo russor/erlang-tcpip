@@ -423,7 +423,7 @@ set(Tcb, _, del_ack, Size) ->
     case Tcb#tcb.dack_timer of
 	    -1 ->
 		Timer = erlang:send_after(?DEFAULT_DACK_TIME, Tcb#tcb.writer, {event, {send, ack}}),
-		io:format("Setting ack Timer for ~w ~w ~w~n",[?DEFAULT_DACK_TIME, Tcb#tcb.writer, {send, ack}]),
+		%io:format("Setting ack Timer for ~w ~w ~w~n",[?DEFAULT_DACK_TIME, Tcb#tcb.writer, {send, ack}]),
 		Tcb#tcb{dack_timer = Timer, dack_data = Size};
 	Timer ->
 	    New_Size = Tcb#tcb.dack_data + Size,
