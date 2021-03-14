@@ -31,7 +31,7 @@
 -define(DEFAULT_RTO, 2500).   % 2.5 seconds
 -define(MAX_RTO, 60000). % one minute
 -define(TCP_MAX_WINDOW, 65535).
--define(DEFAULT_MSL, 120000). % two minutes
+-define(DEFAULT_MSL, 30000). % 30 seconds
 -define(DEFAULT_DACK_TIME, 500). % half a second
 
 
