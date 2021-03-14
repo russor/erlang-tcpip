@@ -71,7 +71,7 @@ process_packet(Tcb, Pkt, State, Writer) ->
 process_rst(Tcb, Pkt, Writer, State, Rcv_Nxt, Data) ->
     case Pkt#pkt.is_rst of
 	1 ->
-	    tcp_con:abort_connection(); % Make this function
+	    tcp_con:abort_connection(Tcb);
 	0 ->
 	    process_syn(Tcb, Pkt, Writer, State, Rcv_Nxt, Data)
     end.
@@ -79,7 +79,7 @@ process_rst(Tcb, Pkt, Writer, State, Rcv_Nxt, Data) ->
 process_syn(Tcb, Pkt, Writer, State, Rcv_Nxt, Data) ->
     case Pkt#pkt.is_syn of
 	1 ->
-	    tcp_con:abort_connection();
+	    tcp_con:abort_connection(Tcb);
 	0 -> 
 	    process_ack(Tcb, Pkt, Writer, State, Rcv_Nxt, Data)
     end.

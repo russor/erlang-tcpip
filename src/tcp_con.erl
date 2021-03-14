@@ -26,7 +26,7 @@
 
 -export([usr_open/2, usr_listen/1, usr_accept/1, init_reader/2, 
 	 init_writer/1, recv/2, recv/3, usr_send/2, send_packet/2, 
-	 close_connection/1, usr_recv/2, usr_close/1, new_mtu/2, 
+	 close_connection/1, abort_connection/1, usr_recv/2, usr_close/1, new_mtu/2,
 	 dst_unr/1, clone/1, usr_sockopt/3]).
 
 
@@ -90,6 +90,10 @@ close_connection(Tcb) ->
     Writer ! close,
     tcb:syncset_tcbdata(Tcb, state, closed),
     tcb:close(Tcb).
+
+% maybe this should do something slightly different?
+abort_connection(Tcb) ->
+    close_connection(Tcb).
 
 new_mtu({Tcb, _, _}, MTU) -> % For PMTU discovery.
     tcb:set_tcbdata(Tcb, smss, MTU-40).
