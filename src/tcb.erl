@@ -27,6 +27,7 @@
 -export([start/3, start/1, init/1, init/3, get_tcbdata/2, 
 	 set_tcbdata/3, syncset_tcbdata/3, close/1, subscribe/2, 
 	 unsubscribe/2, clone/1]).
+-export([handle_info/2]).
 
 -include("tcb.hrl").
 -include("tcp_packet.hrl").
@@ -39,10 +40,10 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 start(listen) ->
-    spawn_link(tcb, init, [listen]).
+    proc_lib:spawn_link(tcb, init, [listen]).
 
 start(closed, Rt_Ip, Rt_Port) ->
-    spawn_link(tcb, init, [closed, Rt_Ip, Rt_Port]).
+    proc_lib:spawn_link(tcb, init, [closed, Rt_Ip, Rt_Port]).
 
 get_tcbdata(Tcb, Attr) ->
     Tcb ! {get, Attr, self()},
@@ -90,63 +91,71 @@ close(Tcb) ->
 init(listen) ->
     Tcb = init_tcb(-1, -1, listen),
     Observers = init_observers(),
-    loop(Tcb, Observers);
+    gen_server:enter_loop(?MODULE, [], {Tcb, Observers});
 init(Tcb) ->
-    loop(Tcb, init_observers()).
+    gen_server:enter_loop(?MODULE, [], {Tcb, init_observers()}).
 
 init(closed, Rt_Ip, Rt_Port) ->
     Tcb = init_tcb(Rt_Ip, Rt_Port, closed),
     Observers = init_observers(),
-    loop(Tcb, Observers).
+    gen_server:enter_loop(?MODULE, [], {Tcb, Observers}).
 
-loop(Tcb, Observers) ->
-    receive 
-        {set, open_queue, Value, _From} ->
-            {New_Tcb, New_Observers} = set(Tcb, Observers, open_queue, Value),
-            loop(New_Tcb, New_Observers);
-	{set, Param, Value, _From} ->
-	    New_Tcb = set(Tcb, Observers, Param, Value),
-	    loop(New_Tcb, Observers);
-	{syncset, Param, Value, From} ->
-	    New_Tcb = set(Tcb, Observers, Param, Value),
-	    From ! {syncset, ok},
-	    loop(New_Tcb, Observers);
-	{get, Param, From} ->
-	    New_Tcb = get(Tcb, Observers, Param, From),
-	    loop(New_Tcb, Observers);
-	{subscribe, listener_queue, From} ->
-	    From ! {tcb,ok},
-	    {New_Tcb, New_Observers} = add(listener_queue, From, Tcb, Observers),
-            loop(New_Tcb, New_Observers);
-	{subscribe, Param, From} ->
-	    From ! {tcb,ok},
-	    loop(Tcb, add(Param, From, Observers));
-	{unsubscribe, Param, From} ->
-	    loop(Tcb, remove(Param, From, Observers));
-	close ->
-	    cancel_timers(Tcb),
-	    set(Tcb, Observers, state, closed),
-            notify(Tcb, Observers, closed),
-            lists:foreach(fun(S) -> etcpip_socket:close(S) end,
-                          queue:to_list(Tcb#tcb.open_queue)),
-	    exit(Tcb#tcb.writer, normal),
-	    exit(Tcb#tcb.reader, normal);
-	{state, established, Socket} ->
-	    {Other_Tcb, _, _} = Socket,
-	    tcb:unsubscribe(Other_Tcb, state),
-	    {New_Tcb, New_Observers} = set(Tcb, Observers, open_queue, Socket),
-	    loop(New_Tcb, New_Observers);
-	{state, _State, _} -> % Erase them if the connection closes??
-	    loop(Tcb, Observers);
-	{clone, From} ->
-	    N_Tcb=Tcb#tcb{reader=-1,
-			  writer=-1,
-			  syn_queue=[],
-			  open_queue=queue:new()},
-	    NTcb_Proc = spawn(tcb, init, [N_Tcb]),
-	    From ! {clone, NTcb_Proc},
-	    loop(Tcb, Observers)
-    end.
+handle_info({set, open_queue, Value, _From}, {Tcb, Observers}) ->
+    {New_Tcb, New_Observers} = set(Tcb, Observers, open_queue, Value),
+    {noreply, {New_Tcb, New_Observers}};
+
+handle_info({set, Param, Value, _From}, {Tcb, Observers}) ->
+    New_Tcb = set(Tcb, Observers, Param, Value),
+    {noreply, {New_Tcb, Observers}};
+
+handle_info({syncset, Param, Value, From}, {Tcb, Observers}) ->
+    New_Tcb = set(Tcb, Observers, Param, Value),
+    From ! {syncset, ok},
+    {noreply, {New_Tcb, Observers}};
+
+handle_info({get, Param, From}, {Tcb, Observers}) ->
+    New_Tcb = get(Tcb, Observers, Param, From),
+    {noreply, {New_Tcb, Observers}};
+
+handle_info({subscribe, listener_queue, From}, {Tcb, Observers}) ->
+    From ! {tcb,ok},
+    {New_Tcb, New_Observers} = add(listener_queue, From, Tcb, Observers),
+    {noreply, {New_Tcb, New_Observers}};
+
+handle_info({subscribe, Param, From}, {Tcb, Observers}) ->
+    From ! {tcb,ok},
+    {noreply, {Tcb, add(Param, From, Observers)}};
+
+handle_info({unsubscribe, Param, From}, {Tcb, Observers}) ->
+    {noreply, {Tcb, remove(Param, From, Observers)}};
+
+handle_info(close, {Tcb, Observers}) ->
+    cancel_timers(Tcb),
+    set(Tcb, Observers, state, closed),
+    notify(Tcb, Observers, closed),
+    lists:foreach(fun(S) -> etcpip_socket:close(S) end,
+		  queue:to_list(Tcb#tcb.open_queue)),
+    exit(Tcb#tcb.writer, normal),
+    exit(Tcb#tcb.reader, normal),
+    {stop, normal, {}};
+
+handle_info({state, established, Socket}, {Tcb, Observers}) ->
+    {Other_Tcb, _, _} = Socket,
+    tcb:unsubscribe(Other_Tcb, state),
+    {New_Tcb, New_Observers} = set(Tcb, Observers, open_queue, Socket),
+    {noreply, {New_Tcb, New_Observers}};
+
+handle_info({state, _State, _}, {Tcb, Observers}) -> % Erase them if the connection closes??
+    {noreply, {Tcb, Observers}};
+
+handle_info({clone, From}, {Tcb, Observers}) ->
+    N_Tcb=Tcb#tcb{reader=-1,
+		  writer=-1,
+		  syn_queue=[],
+		  open_queue=queue:new()},
+    NTcb_Proc = proc_lib:spawn(tcb, init, [N_Tcb]),
+    From ! {clone, NTcb_Proc},
+    {noreply, {Tcb, Observers}}.
 
 
 %%%%%%%%%%%%%%%%%%%%%%  GET DATA FUNCTIONS %%%%%%%%%%%%%%%%%%%

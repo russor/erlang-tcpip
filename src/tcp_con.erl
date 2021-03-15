@@ -28,7 +28,7 @@
 	 init_writer/1, recv/2, recv/3, usr_send/2, send_packet/2, 
 	 close_connection/1, abort_connection/1, usr_recv/2, usr_close/1, new_mtu/2,
 	 dst_unr/1, clone/1, usr_sockopt/3]).
-
+-export([handle_info/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API FOR APPLICATION LEVEL PROTOCOLS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -105,8 +105,8 @@ dst_unr({_Tcb, _, _}) -> % Should send the user an error. Unimplemented
 %% Used for creating connections from listen sockets
 clone(Tcb) ->
     N_Tcb = tcb:clone(Tcb),
-    Writer = spawn(tcp_con, init_writer, [N_Tcb]),
-    Reader = spawn(tcp_con, init_reader, [N_Tcb, Writer]),
+    Writer = proc_lib:spawn(tcp_con, init_writer, [N_Tcb]),
+    Reader = proc_lib:spawn(tcp_con, init_reader, [N_Tcb, Writer]),
     tcb:set_tcbdata(N_Tcb, reader, Reader),
     tcb:set_tcbdata(N_Tcb, writer, Writer),
     {N_Tcb, Reader, Writer}.
@@ -118,8 +118,8 @@ clone(Tcb) ->
 
 init(Rt_Ip, Rt_Port) ->
     Tcb = tcb:start(closed, Rt_Ip, Rt_Port),
-    Writer = spawn_link(tcp_con, init_writer, [Tcb]),
-    Reader = spawn_link(tcp_con, init_reader, [Tcb, Writer]),
+    Writer = proc_lib:spawn_link(tcp_con, init_writer, [Tcb]),
+    Reader = proc_lib:spawn_link(tcp_con, init_reader, [Tcb, Writer]),
     {ok, Lc_Ip, Lc_Port} = tcp_pool:add({remote, {Rt_Ip, Rt_Port}},
 					{Tcb, Reader, Writer}),
     tcb:set_tcbdata(Tcb, lsocket, {Lc_Ip, Lc_Port}),
@@ -129,8 +129,8 @@ init(Rt_Ip, Rt_Port) ->
 
 init(Lc_Port) ->
     Tcb = tcb:start(listen),
-    Writer = spawn(tcp_con, init_writer, [Tcb]),
-    Reader = spawn(tcp_con, init_reader, [Tcb, Writer]),
+    Writer = proc_lib:spawn(tcp_con, init_writer, [Tcb]),
+    Reader = proc_lib:spawn(tcp_con, init_reader, [Tcb, Writer]),
     {ok, Lc_Ip, Lc_Port} = tcp_pool:add({local, Lc_Port}, 
 					{Tcb, Reader, Writer}),
     tcb:set_tcbdata(Tcb, lsocket, {Lc_Ip, Lc_Port}),
@@ -140,60 +140,46 @@ init(Lc_Port) ->
 init_reader(Tcb, Writer) ->
     tcb:set_tcbdata(Tcb, reader, self()),
     State = tcb:get_tcbdata(Tcb, state),
-    reader_loop(Tcb, State, Writer).
+    gen_server:enter_loop(?MODULE, [], {reader, Tcb, State, Writer}).
 
 init_writer(Tcb) ->
     tcb:set_tcbdata(Tcb, writer, self()),
     State = tcb:get_tcbdata(Tcb, state),
-    writer_loop(Tcb, State, 0).
+    gen_server:enter_loop(?MODULE, [], {writer, Tcb, State, 0}).
 
-reader_loop(Tcb, State, Writer) ->
-    receive
-	{state, New_State} ->
-	    reader_loop(Tcb, New_State, Writer)
-    after 0 -> ok
-    end,
-    receive
-	{state, N_State} ->
-	    reader_loop(Tcb, N_State, Writer);
-	{recv, Pkt} ->
-            %% Veryfy MD5 Checksum now we have the TCB...
-            case packet_check:verify_md5(Tcb, Pkt) of
-                ok ->
-                    State:recv(Tcb, Pkt, Writer);
-                Error ->
-                    %% TODO - Log an error, rate-limited here...
-                    io:format("MD5 Checksum error: ~p~n", [Error])
-                end,
-	    reader_loop(Tcb, State, Writer);
-	{'EXIT', normal} ->
-	    ok;
-	close ->
-	    ok
-    end.
+handle_info({state, New_State}, {reader, Tcb, _State, Writer}) ->
+    {noreply, {reader, Tcb, New_State, Writer}};
 
-writer_loop(Tcb, State, Data_Avail) ->
-    receive
-	{state, New_State} ->
-	    writer_loop(Tcb, New_State, Data_Avail)
-    after 0 ->
-            {Timeout, Def_Msg} = check_send(Tcb, State, Data_Avail),
-            receive
-                {'EXIT', normal} ->
-                    ok;
-                close ->
-                    ok;
-                {state, N_State} ->
-                    writer_loop(Tcb, N_State, Data_Avail);
-                {event, Message} ->
-                    New_Data_Avail = procces_msg(Tcb, State, Message),
-                    writer_loop(Tcb, State, New_Data_Avail)
-            after
-                Timeout ->
-                    New_Data_Avail = procces_msg(Tcb, State, {send, Def_Msg}),
-                    writer_loop(Tcb, State, New_Data_Avail)
-            end
-    end.
+handle_info({recv, Pkt}, {reader, Tcb, State, Writer}) ->
+    %% Veryfy MD5 Checksum now we have the TCB...
+    case packet_check:verify_md5(Tcb, Pkt) of
+        ok ->
+            State:recv(Tcb, Pkt, Writer);
+        Error ->
+            %% TODO - Log an error, rate-limited here...
+            io:format("MD5 Checksum error: ~p~n", [Error])
+        end,
+    {noreply, {reader, Tcb, State, Writer}};
+
+handle_info({'EXIT', normal}, _) ->
+    {stop, normal, {}};
+handle_info(close, _) ->
+    {stop, normal, {}};
+
+handle_info({state, New_State}, {writer, Tcb, _State, Data_Avail}) ->
+    {Timeout, _Def_Msg} = check_send(Tcb, New_State, Data_Avail),
+    {noreply, {writer, Tcb, New_State, Data_Avail}, Timeout};
+
+handle_info({event, Message}, {writer, Tcb, State, Data_Avail}) ->
+    {Timeout, _Def_Msg} = check_send(Tcb, State, Data_Avail),
+    New_Data_Avail = procces_msg(Tcb, State, Message),
+    {noreply, {writer, Tcb, State, New_Data_Avail}, Timeout};
+
+handle_info(timeout, {writer, Tcb, State, Data_Avail}) ->
+    {_Timeout, Def_Msg} = check_send(Tcb, State, Data_Avail),
+    New_Data_Avail = procces_msg(Tcb, State, {send, Def_Msg}),
+    {Timeout, _Def_Msg} = check_send(Tcb, State, New_Data_Avail),
+    {noreply, {writer, Tcb, State, New_Data_Avail}, Timeout}.
 
 procces_msg(Tcb, State, Event) ->
     case State:send(Tcb, Event) of
@@ -205,11 +191,11 @@ procces_msg(Tcb, State, Event) ->
     
 
 %% Check if there is something to be sent
-check_send(Tcb, closed, 0) ->
+check_send(_Tcb, closed, 0) ->
     {infinity, data};
-check_send(Tcb, listen, 0) ->
+check_send(_Tcb, listen, 0) ->
     {infinity, data};
-check_send(Tcb, State, Data_Avail) ->
+check_send(Tcb, _State, Data_Avail) ->
     case Data_Avail of
 	0 ->
 	    case tcb:get_tcbdata(Tcb, sbufsize) of
