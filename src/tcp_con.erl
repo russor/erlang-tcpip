@@ -166,6 +166,11 @@ handle_info({'EXIT', normal}, _) ->
 handle_info(close, _) ->
     {stop, normal, {}};
 
+handle_info(time_wait, {writer, Tcb, State, Data_Avail}) ->
+    {Timeout, _Def_Msg} = check_send(Tcb, State, Data_Avail),
+    tcb:close(Tcb),
+    {noreply, {writer, Tcb, State, Data_Avail}, Timeout};
+
 handle_info({state, New_State}, {writer, Tcb, _State, Data_Avail}) ->
     {Timeout, _Def_Msg} = check_send(Tcb, New_State, Data_Avail),
     {noreply, {writer, Tcb, New_State, Data_Avail}, Timeout};
