@@ -85,11 +85,11 @@ demux_packet(Pkt) ->
     case tcp_pool:get({Pkt#pkt.dip, Pkt#pkt.dport, 
 		       Pkt#pkt.sip, Pkt#pkt.sport}) of
 	{ok, Conn} ->
-	    tcp_con:recv(Conn, Pkt);
+	    gen_server:cast(Conn, {in, Pkt});
 	{error, _} -> % Try to find a passive connection (Incoming syn?)
 	    case tcp_pool:get({Pkt#pkt.dip, Pkt#pkt.dport}) of
 		{ok, Conn} ->
-		    tcp_con:recv(Conn, Pkt);
+		    gen_server:cast(Conn, {in, Pkt});
 		{error, Error} ->
 		    closed:recv(Pkt), % Send rst
 		    {error, Error}

@@ -62,8 +62,7 @@ send(Conn, Data) ->
 send(Src_Port, Dst_Ip, Dst_Port, Data) -> %% Udp
     udp:send(Dst_Ip, Dst_Port, Src_Port, Data).
 
-close(Conn) ->
-    tcp_con:usr_close(Conn).
+close(Conn) -> gen_server:call(Conn, close).
 
 string_to_ip(Ip) ->
     T = string:tokens(Ip, "."),

@@ -36,8 +36,6 @@
 
 
 -record(tcb, {
-	  reader,                       % reader process
-	  writer,                       % writer process
 	  client,                       % client process
 
 	  lc_port   = -1,               % local port number
@@ -81,9 +79,8 @@
 	  irs       = -1,               % initial receive sequence number
 	  twtimer   = -1,               % time-wait timer
 
-	  send_fin  = 0,                % user closed but there is data left
+	  send_fin  = false,                % user closed but there is data left
 	  out_order = out_order:new(),  % queue for out of order data
-	  wrt_wait  = false,            % writer thread is on hold
 	  dack_timer= -1,               % delayed ack timer
 	  dack_data = 0,                % delayed ack data to be acked
 	  
@@ -91,7 +88,5 @@
 	                                %   listen sockets
 	  open_queue= queue:new(),      % queue of established connections for
 	                                %   listen sockets
-
-          rfc2385_keys = []             % Tuples of {ipaddr, key}
+	  obs = queue:new()
 }).
-

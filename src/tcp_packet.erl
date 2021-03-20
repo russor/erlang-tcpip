@@ -24,6 +24,7 @@
 
 -module(tcp_packet).
 
+-include("tcb.hrl").
 -include("tcp_packet.hrl").
 -include("ip.hrl").
 
@@ -43,20 +44,19 @@ parse(Src_Ip, Dst_Ip, Packet) ->
     end.
 
 send_packet(Tcb, rto) -> % Retransmit packet
-    case tcb:get_tcbdata(Tcb, rqueue) of
-	empty ->
-	    ok;
-	Packet ->
-	    Smss = tcb:get_tcbdata(Tcb, smss),
-	    retransmit(Tcb, Packet, Smss)
+    case tcb:get_rqueue(Tcb) of
+	{Tcb1, empty} -> Tcb1;
+	{Tcb1, Packet} ->
+	    retransmit(Tcb, Packet, Tcb#tcb.smss),
+	    Tcb1
     end;
+
 send_packet(Tcb, Type) ->
     case build_packet(Tcb, Type) of
 	{error, Error} ->
-	    {error, Error};
-	{ok, Pkt, Data_Avail} ->
-	    send_packet_1(Tcb, Pkt),
-	    {ok, Data_Avail}
+	    {error, Error, Tcb};
+	{ok, Tcb1, Pkt} ->
+	    send_packet_1(Tcb1, Pkt)
     end.
 
 send_packet(Pkt) ->
@@ -161,18 +161,17 @@ send_packet_1(Tcb, Pkt) ->
     ip:send(Bin_Packet, Len, tcp, Pkt#pkt.dip),
     
     Seq_Len = size(Pkt#pkt.data)+Pkt#pkt.is_syn+Pkt#pkt.is_fin,
-    prepare_retransmit(Tcb, Pkt#pkt.seq, Seq_Len, Pkt),
+    Tcb1 = prepare_retransmit(Tcb, Pkt#pkt.seq, Seq_Len, Pkt),
     if
 	(Pkt#pkt.is_syn == 1) or (Pkt#pkt.is_fin == 1) ->
-	    tcb:set_tcbdata(Tcb, snd_nxt, 1);
+	    tcb:set_snd_nxt(Tcb1, 1);
 	true ->
-	    ok
+	    Tcb1
     end.
 
 prepare_retransmit(Tcb, Snd_Nxt, Seq_Len, Packet) when Seq_Len > 0 ->
-    tcb:set_tcbdata(Tcb, rqueue, {seq:add(Snd_Nxt, Seq_Len), Packet});
-prepare_retransmit(_, _, _, _) ->
-    ok.
+    tcb:set_rqueue(Tcb, {seq:add(Snd_Nxt, Seq_Len), Packet});
+prepare_retransmit(Tcb, _, _, _) -> Tcb.
 
 build_options(Options) ->
     OptBin = lists:filtermap(fun build_option/1, Options),
@@ -184,8 +183,6 @@ build_options(Options) ->
 
 build_option({mss, Value})->
     {true, <<2:8, 4:8, Value:16/big-integer>>};
-build_option({md5, Value}) ->
-    {true, <<19:8, 18:8, Value/binary>>};
 build_option(_) ->
     false.
 
@@ -197,27 +194,16 @@ options_size(Options) ->
     end.
 
 option_size({mss, _}, Acc) -> Acc + 4;
-option_size({md5, _}, Acc) -> Acc + 18;
 option_size(_, Acc) -> Acc.
 
 calculate_offset(Options) ->
     5 + (options_size(Options) div 4).
 
 build_bin_packet(Tcb, Pkt) ->
-    %% Set MD5 option as a default...
-    {Key, MD5_Opt} =
-        case tcb:get_tcbdata(Tcb, {rfc2385_keys, Pkt#pkt.dip}) of
-            [] -> {not_signed, []};
-            [{_I, K} | _] ->
-                %% use the first key
-                {K, [{md5, <<0:(8*16)>>}]}
-        end,
     Options =
         case Pkt#pkt.is_syn of
-            1 ->
-                [{mss, tcb:get_tcbdata(Tcb, rmss)} | MD5_Opt];
-            0 ->
-                MD5_Opt
+            1 -> [{mss, Tcb#tcb.rmss}];
+            0 -> []
         end,
     Offset = calculate_offset(Options),
     SPkt = Pkt#pkt{options = Options,
@@ -225,18 +211,7 @@ build_bin_packet(Tcb, Pkt) ->
                    segment_len = (Offset * 4) + Pkt#pkt.data_size
                   },
     {Pre_Chk, Post_Chk} = build_bin_packet_1(SPkt),
-    UpdatedOptions =
-        case Key of
-            not_signed -> Options;
-            _ ->
-                %% Calculate MD5 hash, and insert it into the Options list..
-                MD5Sum = packet_check:calculate_md5(SPkt, Key),
-                lists:map(
-                  fun({md5, _}) -> {md5, MD5Sum};
-                     (A) -> A
-                  end, Options)
-        end,
-    OptBin = build_options(UpdatedOptions),
+    OptBin = build_options(Options),
     add_checksum(SPkt#pkt.sip, SPkt#pkt.dip, Pre_Chk, Post_Chk,
 		 OptBin, SPkt#pkt.data, SPkt#pkt.data_size).
 
@@ -270,61 +245,46 @@ add_checksum(Src_Ip, Dst_Ip, Pre_Chk, Post_Chk, Options, Data, Data_Size) ->
 
 % Ack, Psh, Rst, Syn, Fin, Snd_Nxt, Data
 
-build_packet(Tcb, syn) ->
-    build_packet_1(Tcb, nodata, 0, 0, 0, 1, 0);
-build_packet(Tcb, synack) ->
-    build_packet_1(Tcb, nodata, 1, 0, 0, 1, 0);
+build_packet(Tcb, syn) -> build_packet_1(Tcb, nodata, 0, 0, 0, 1);
+build_packet(Tcb, synack) -> build_packet_1(Tcb, nodata, 1, 0, 0, 1);
 build_packet(Tcb, data) ->
-    {ok, Pkt, Data_Avail} = build_packet_1(Tcb, data, 1, 1, 0, 0, 0),
+    {ok, Tcb1, Pkt} = build_packet_1(Tcb, data, 1, 1, 0, 0),
     if 
-	size(Pkt#pkt.data) == 0 ->
-	    {error, nodata};
+	size(Pkt#pkt.data) == 0 andalso Pkt#pkt.is_fin == 0 ->
+	    {error, nodata, Tcb1};
 	true ->
-	    {ok, Pkt, Data_Avail}
+	    {ok, Tcb1, Pkt}
     end;
 build_packet(Tcb, ack) ->
-    {ok, Pkt, Data_Avail} = build_packet_1(Tcb, data, 1, 0, 0, 0, 0),
+    {ok, Tcb1, Pkt} = build_packet_1(Tcb, data, 1, 0, 0, 0),
     if
-	size(Pkt#pkt.data) > 0 ->
-		  {ok, Pkt#pkt{is_psh=1}, Data_Avail};
-	true ->
-		  {ok, Pkt, Data_Avail}
+	size(Pkt#pkt.data) > 0 -> {ok, Tcb1, Pkt#pkt{is_psh=1}};
+	true -> {ok, Tcb1, Pkt}
     end;
-build_packet(Tcb, fin) ->
-    build_packet_1(Tcb, nodata, 1, 0, 0, 0, 1);
-build_packet(Tcb, rst) ->
-    build_packet_1(Tcb, nodata, 1, 0, 1, 0, 0).
+build_packet(Tcb, rst) -> build_packet_1(Tcb, nodata, 1, 0, 1, 0).
 
-build_packet_1(Tcb, Type, Is_Ack, Is_Psh, Is_Rst, Is_Syn, Is_Fin) ->
-    case Type of 
-	nodata ->
-	    {_, Snd_Nxt, _, _} = tcb:get_tcbdata(Tcb, snd),
-	    {Lc_Ip, Lc_Port, Rt_Ip, Rt_Port,
-	     Rcv_Nxt, Rcv_Wnd} = tcb:get_tcbdata(Tcb, socket),
-	    Data = <<>>,
-	    Data_Size = 0,
-	    Data_Avail = 0;
-	data ->
-	    {Snd_Nxt, Data_Avail, Data, Data_Size, Lc_Ip, Lc_Port, Rt_Ip, 
-	     Rt_Port, Rcv_Nxt, Rcv_Wnd} = tcb:get_tcbdata(Tcb, sdata)
+build_packet_1(Tcb, Type, Is_Ack, Is_Psh, Is_Rst, Is_Syn) ->
+    {Tcb1, Data, SndNext, Is_Fin} = case Type of
+	nodata -> {Tcb, <<>>, Tcb#tcb.snd_nxt, 0};
+	data -> tcb:get_sdata(Tcb)
     end,
-    Pkt = #pkt{sip   = Lc_Ip,
-	       dip   = Rt_Ip,
-               sport = Lc_Port,
-	       dport = Rt_Port,
-	       seq   = Snd_Nxt,
-	       ack   = Rcv_Nxt,
+    Pkt = #pkt{sip   = Tcb1#tcb.lc_ip,
+	       dip   = Tcb1#tcb.rt_ip,
+               sport = Tcb1#tcb.lc_port,
+	       dport = Tcb1#tcb.rt_port,
+	       seq   = SndNext,
+	       ack   = Tcb1#tcb.rcv_nxt,
 	       is_urg= 0,
 	       is_ack= Is_Ack,
 	       is_psh= Is_Psh,
 	       is_rst= Is_Rst,
 	       is_syn= Is_Syn,
 	       is_fin= Is_Fin,
-	       window= Rcv_Wnd,
+	       window= Tcb1#tcb.rcv_wnd,
 	       urgent= 0,
 	       data = Data,
-	       data_size = Data_Size},
-    {ok, Pkt, Data_Avail}.
+	       data_size = size(Data)},
+    {ok, Tcb1, Pkt}.
 
 %% Retransmissions
 

@@ -24,72 +24,33 @@
 
 -module(tcp_con).
 
--export([usr_open/2, usr_listen/1, usr_accept/1, init_reader/2, 
-	 init_writer/1, recv/2, recv/3, usr_send/2, send_packet/2, 
-	 close_connection/1, abort_connection/1, usr_recv/2, usr_close/1, new_mtu/2,
-	 dst_unr/1, clone/1, usr_sockopt/3]).
--export([handle_info/2]).
+-export([usr_listen/1, usr_accept/1, usr_send/2,
+	 close_connection/1, abort_connection/1, usr_recv/2, new_mtu/2,
+	 dst_unr/1, usr_sockopt/3]).
 
+-include("tcb.hrl").
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API FOR APPLICATION LEVEL PROTOCOLS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-usr_open(Rt_Ip, Rt_Port) ->  % Active Open
-    init(Rt_Ip, Rt_Port).
+%usr_open(Rt_Ip, Rt_Port) ->  % Active Open
+%    init(Rt_Ip, Rt_Port).
 
 usr_listen(Lc_Port) ->  % Pasive Open
     init(Lc_Port).
 
-usr_accept({Tcb, _Reader, _Writer}) ->
-    accept(Tcb).
+usr_accept(Tcb) -> accept(Tcb).
 
-usr_close({Tcb, _Reader, Writer}) ->
-    State = tcb:get_tcbdata(Tcb, state),
-    case State:close() of
-	ok ->
-	    close(Tcb, Writer);
-	{error, Error} ->
-	    {error, Error}
-    end.
+usr_send(Tcb, Data) -> gen_server:call(Tcb, {queue, Data}).
 
-usr_send({Tcb, _Reader, _Writer}, Data) ->
-    State = tcb:get_tcbdata(Tcb, state),
-    case State:queue() of
-	ok ->
-	    queue(Tcb, Data);
-	{error, Error} ->
-	    {error, Error}
-    end.
-
-usr_recv({Tcb, _Reader, _Writer}, Bytes) ->
-    State = tcb:get_tcbdata(Tcb, state),
-    case State:read(Tcb, Bytes) of
-	{ok, New_Bytes} ->
-	    read(Tcb, New_Bytes);
-	{error, Error} ->
-	    {error, Error}
-    end.
+usr_recv(Tcb, Bytes) -> gen_server:call(Tcb, {read, Bytes}).
 
 usr_sockopt({Tcb, _Reader, _Writer}, Param, Value) ->
     tcb:set_tcbdata(Tcb, Param, Value).
 
 %%%%%%%%%%%%%%%%%% API FOR OTHER TCP AND IP MODULES %%%%%%%%%%%%%
 
-recv({_, Reader, _}, Pkt) ->
-    Reader ! {recv, Pkt}.
-
-recv(Src_Ip, {_, Reader, _}, Pkt) ->
-    Reader ! {recv, Src_Ip, Pkt}.
-
-send_packet(Writer, Type) ->
-    Writer ! {event, {send, Type}}.
-
 close_connection(Tcb) ->
-    Reader = tcb:get_tcbdata(Tcb, reader),
-    Writer = tcb:get_tcbdata(Tcb, writer),
-    tcp_pool:remove({Tcb, Reader, Writer}),
-    Reader ! close,
-    Writer ! close,
-    tcb:syncset_tcbdata(Tcb, state, closed),
-    tcb:close(Tcb).
+    tcp_pool:remove(Tcb),
+    tcb:set_state(Tcb, closed).
 
 % maybe this should do something slightly different?
 abort_connection(Tcb) ->
@@ -101,126 +62,29 @@ new_mtu({Tcb, _, _}, MTU) -> % For PMTU discovery.
 dst_unr({_Tcb, _, _}) -> % Should send the user an error. Unimplemented
     ok.
 
-%% Clone a connection using the data from this Tcb.
-%% Used for creating connections from listen sockets
-clone(Tcb) ->
-    N_Tcb = tcb:clone(Tcb),
-    Writer = proc_lib:spawn(tcp_con, init_writer, [N_Tcb]),
-    Reader = proc_lib:spawn(tcp_con, init_reader, [N_Tcb, Writer]),
-    tcb:set_tcbdata(N_Tcb, reader, Reader),
-    tcb:set_tcbdata(N_Tcb, writer, Writer),
-    {N_Tcb, Reader, Writer}.
-
 %%%%%%%%%%%%%%% Reader and Writer loop %%%%%%%%%%%%%%%
 
 %% Every other protocol has a process for sending and a second one for receiving. 
 %% In tcp the processes are per connection
 
-init(Rt_Ip, Rt_Port) ->
-    Tcb = tcb:start(closed, Rt_Ip, Rt_Port),
-    Writer = proc_lib:spawn_link(tcp_con, init_writer, [Tcb]),
-    Reader = proc_lib:spawn_link(tcp_con, init_reader, [Tcb, Writer]),
-    {ok, Lc_Ip, Lc_Port} = tcp_pool:add({remote, {Rt_Ip, Rt_Port}},
-					{Tcb, Reader, Writer}),
-    tcb:set_tcbdata(Tcb, lsocket, {Lc_Ip, Lc_Port}),
-    send_packet(Writer, syn),
-    wait_state(Tcb, [established]),
-    {Tcb, Reader, Writer}.
-
-init(Lc_Port) ->
-    Tcb = tcb:start(listen),
-    Writer = proc_lib:spawn(tcp_con, init_writer, [Tcb]),
-    Reader = proc_lib:spawn(tcp_con, init_reader, [Tcb, Writer]),
-    {ok, Lc_Ip, Lc_Port} = tcp_pool:add({local, Lc_Port}, 
-					{Tcb, Reader, Writer}),
-    tcb:set_tcbdata(Tcb, lsocket, {Lc_Ip, Lc_Port}),
+%init(Rt_Ip, Rt_Port) ->
+%    Tcb = tcb:start(closed, Rt_Ip, Rt_Port),
+%    Writer = proc_lib:spawn_link(tcp_con, init_writer, [Tcb]),
+%    Reader = proc_lib:spawn_link(tcp_con, init_reader, [Tcb, Writer]),
+%    {ok, Lc_Ip, Lc_Port} = tcp_pool:add({remote, {Rt_Ip, Rt_Port}},
+%					{Tcb, Reader, Writer}),
+%    tcb:set_tcbdata(Tcb, lsocket, {Lc_Ip, Lc_Port}),
+%    %TODO: send_packet(Writer, syn),
 %    wait_state(Tcb, [established]),
-    {Tcb, Reader, Writer}.
+%    {Tcb, Reader, Writer}.
 
-init_reader(Tcb, Writer) ->
-    tcb:set_tcbdata(Tcb, reader, self()),
-    State = tcb:get_tcbdata(Tcb, state),
-    gen_server:enter_loop(?MODULE, [], {reader, Tcb, State, Writer}).
+init(Lc_Port) -> tcb:start(listen, Lc_Port).
 
-init_writer(Tcb) ->
-    tcb:set_tcbdata(Tcb, writer, self()),
-    State = tcb:get_tcbdata(Tcb, state),
-    gen_server:enter_loop(?MODULE, [], {writer, Tcb, State, 0}).
-
-handle_info({state, New_State}, {reader, Tcb, _State, Writer}) ->
-    {noreply, {reader, Tcb, New_State, Writer}};
-
-handle_info({recv, Pkt}, {reader, Tcb, State, Writer}) ->
-    %% Veryfy MD5 Checksum now we have the TCB...
-    case packet_check:verify_md5(Tcb, Pkt) of
-        ok ->
-            State:recv(Tcb, Pkt, Writer);
-        Error ->
-            %% TODO - Log an error, rate-limited here...
-            io:format("MD5 Checksum error: ~p~n", [Error])
-        end,
-    {noreply, {reader, Tcb, State, Writer}};
-
-handle_info({'EXIT', normal}, _) ->
-    {stop, normal, {}};
-handle_info(close, _) ->
-    {stop, normal, {}};
-
-handle_info(time_wait, {writer, Tcb, State, Data_Avail}) ->
-    {Timeout, _Def_Msg} = check_send(Tcb, State, Data_Avail),
-    tcb:close(Tcb),
-    {noreply, {writer, Tcb, State, Data_Avail}, Timeout};
-
-handle_info({state, New_State}, {writer, Tcb, _State, Data_Avail}) ->
-    {Timeout, _Def_Msg} = check_send(Tcb, New_State, Data_Avail),
-    {noreply, {writer, Tcb, New_State, Data_Avail}, Timeout};
-
-handle_info({event, Message}, {writer, Tcb, State, Data_Avail}) ->
-    {Timeout, _Def_Msg} = check_send(Tcb, State, Data_Avail),
-    New_Data_Avail = procces_msg(Tcb, State, Message),
-    {noreply, {writer, Tcb, State, New_Data_Avail}, Timeout};
-
-handle_info(timeout, {writer, Tcb, State, Data_Avail}) ->
-    {_Timeout, Def_Msg} = check_send(Tcb, State, Data_Avail),
-    New_Data_Avail = procces_msg(Tcb, State, {send, Def_Msg}),
-    {Timeout, _Def_Msg} = check_send(Tcb, State, New_Data_Avail),
-    {noreply, {writer, Tcb, State, New_Data_Avail}, Timeout}.
-
-procces_msg(Tcb, State, Event) ->
-    case State:send(Tcb, Event) of
-	{ok, X} when X > 0 ->
-	    X;
-	_ ->
-	    0
-    end.
-    
-
-%% Check if there is something to be sent
-check_send(_Tcb, closed, 0) ->
-    {infinity, data};
-check_send(_Tcb, listen, 0) ->
-    {infinity, data};
-check_send(Tcb, _State, Data_Avail) ->
-    case Data_Avail of
-	0 ->
-	    case tcb:get_tcbdata(Tcb, sbufsize) of
-	    	0 ->
-	    	    case tcb:get_tcbdata(Tcb, send_fin) of
-			1 ->
-		    	    {0, fin};
-			0 ->
-		    	    tcb:set_tcbdata(Tcb, writer_wait, self()), 
-		    	    {infinity, data};
-			timeout ->
-		    	    exit(normal)
-	    	    end;
-		_ ->
-		    tcb:set_tcbdata(Tcb, writer_wait, self()),
-		    {infinity,data}
-	    end;
-	_ ->
-	    {0, data}
-    end.
+%handle_info(timeout, {writer, Tcb, State, Data_Avail}) ->
+%    {_Timeout, Def_Msg} = check_send(Tcb, State, Data_Avail),
+%    New_Data_Avail = procces_msg(Tcb, State, {send, Def_Msg}),
+%    {Timeout, _Def_Msg} = check_send(Tcb, State, New_Data_Avail),
+%    {noreply, {writer, Tcb, State, New_Data_Avail}, Timeout}.
 
 %%%%%%%%%%%%%%%%%%%%% User Commands %%%%%%%%%%%%%%%%%%%%
 
@@ -251,44 +115,6 @@ wait_state_1(State_List) ->
 	    end
     end.
 
-
-queue(Tcb, Data) ->
-    tcb:subscribe(Tcb, sdata),
-    tcb:set_tcbdata(Tcb, sdata, Data),
-    queue_wait(),
-    tcb:unsubscribe(Tcb, sdata),
-    ok.
-
-queue_wait() ->
-    receive
-	{sdata, Size, Bufsize} ->
-	    if
-		Size =< Bufsize ->
-		    ok;
-		true ->
-		    queue_wait()
-	    end
-    end.
-
-read(Tcb, Bytes) ->
-    case tcb:get_tcbdata(Tcb, {rdata, Bytes}) of
-	<<>> ->
-	    tcb:subscribe(Tcb, rdata),
-	    case tcb:get_tcbdata(Tcb, {rdata, Bytes}) of
-		<<>> ->
-		    receive
-			{rdata, Size} when Size > 0 ->
-			    tcb:unsubscribe(Tcb, rdata),
-			    read(Tcb, Bytes)
-		    end;
-		Data ->
-		    tcb:unsubscribe(Tcb, rdata),
-		    Data
-	    end;
-	Data ->
-	    Data
-    end.
-
 close(Tcb, Writer) ->
     tcp_con:send_packet(Writer, fin),
     wait_state(Tcb, [time_wait, closed]).
@@ -300,7 +126,18 @@ accept(Tcb) ->
             %% Listen socket was closed...
             closed;
         {open_con, Socket} ->
-            {Other_Tcb, _, _} = Socket,
-            link(Other_Tcb),
+            link(Socket),
             Socket
     end.
+
+
+state_close(close_wait) -> ok;
+state_close(closing) -> {error, connection_closing};
+state_close(established) -> ok;
+state_close(fin_wait_1) -> {error, connection_closing};
+state_close(fin_wait_2) -> {error, connection_closing};
+state_close(last_ack) -> {error, connection_closing};
+state_close(listen) -> ok;
+state_close(syn_rcvd) -> ok;
+state_close(syn_sent) -> ok;
+state_close(time_wait) -> {error, connection_closing}.
