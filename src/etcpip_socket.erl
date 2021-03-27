@@ -47,17 +47,14 @@ open(tcp, Dst_Ip, Dst_Port) ->
 open(udp, Lc_Port, Dst_Ip, Dst_Port) -> %% Udp
     udp:usr_open(Lc_Port, Dst_Ip, Dst_Port).
 
-listen(Src_Port) ->
-    tcp_con:usr_listen(Src_Port).
+listen(Src_Port) -> tcb:start(listen, Src_Port).
 
 accept(ListenConn) ->
     tcp_con:usr_accept(ListenConn).
 
-recv(Conn, Bytes) ->
-    tcp_con:usr_recv(Conn, Bytes).
+recv(Conn, Bytes) -> gen_server:call(Conn, {read, Bytes}).
 
-send(Conn, Data) ->
-    tcp_con:usr_send(Conn, Data).
+send(Conn, Data) -> gen_server:call(Conn, {queue, Data}).
 
 send(Src_Port, Dst_Ip, Dst_Port, Data) -> %% Udp
     udp:send(Dst_Ip, Dst_Port, Src_Port, Data).
@@ -96,7 +93,6 @@ init(Full, PhyModule, L2Module) ->
     icmp:start(),
     udp:start(Ip),
     tcp_pool:start(Ip),
-    iss:start(),
     tcp:start().
 
 %% Stack is IPv4 only...

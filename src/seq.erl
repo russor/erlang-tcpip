@@ -42,10 +42,10 @@ ge(X, Y) ->
     not lt(X, Y).
 
 add(X, Y) ->
-    (X + Y) rem ?INT32. 
+    (X + Y) band (?INT32 - 1).
 
 sub(X, Y) ->
-    (X - Y) rem ?INT32.
+    (X - Y) band (?INT32 - 1).
 
 min(X, Y) ->
     case lt(X, Y) of

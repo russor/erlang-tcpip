@@ -66,6 +66,7 @@
 	  rtseq     = -1,               % sequence number for rtt measurement
 
 	  snd_una,                      % first sent byte unacked
+	  snd_max,                      % highest sequence number sent
 	  snd_nxt,                      % next byte to send
 	  snd_wnd   = ?TCP_MAX_WINDOW,  % send window
 	  snd_up    = 0,                % urgent pointer
@@ -79,7 +80,7 @@
 	  irs       = -1,               % initial receive sequence number
 	  twtimer   = -1,               % time-wait timer
 
-	  send_fin  = false,                % user closed but there is data left
+	  send_fin  = 0,                % 1 -> user closed, 2 -> user closed and fin was sent
 	  out_order = out_order:new(),  % queue for out of order data
 	  dack_timer= -1,               % delayed ack timer
 	  dack_data = 0,                % delayed ack data to be acked
@@ -88,5 +89,6 @@
 	                                %   listen sockets
 	  open_queue= queue:new(),      % queue of established connections for
 	                                %   listen sockets
-	  obs = queue:new()
+	  obs = queue:new(),
+	  send_type = none
 }).
