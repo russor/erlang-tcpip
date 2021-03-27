@@ -24,7 +24,7 @@
 
 -module(tcb).
 
--export([start/3, start/2, init/2, init/3, subscribe/2, unsubscribe/2, clone/3]).
+-export([start/3, start/2, init/2, init/3, subscribe/2, unsubscribe/2]).
 -export([handle_info/2, handle_cast/2, handle_call/3]).
 -export([set_snd_wnd/2, set_snd_una/2, set_del_ack/2,
          set_rqueue/2, set_state/2,
@@ -45,7 +45,7 @@ start(listen, Port) ->
 start(closed, Rt_Ip, Rt_Port) ->
     proc_lib:spawn_link(tcb, init, [closed, Rt_Ip, Rt_Port]).
 
-clone(Tcb, Socket, Irs) ->
+clone(Tcb, Socket, Irs, Mss) ->
     Rcv_Next = seq:add(Irs, 1),
     {Rt_ip, Rt_port} = Socket,
     % TODO: use secure random
@@ -59,7 +59,8 @@ clone(Tcb, Socket, Irs) ->
 		  obs = self(),
 		  iss = Iss, snd_nxt = Iss, snd_una = Iss,
 		  snd_max = seq:add(Iss, 1),
-		  send_type = ack
+		  send_type = ack,
+		  smss = Mss
 		  },
     NTcb_Proc = proc_lib:spawn(tcb, init, [N_Tcb, self()]),
     NTcb_Proc.
@@ -445,7 +446,13 @@ in(listen, Tcb, Pkt) ->
 		_ ->
 		    % TODO: syn_queue scalability (ala syncache/syncookie,
 		    % also a big list of in progress connections will be bad
-		    N_Tcb = clone(Tcb, {Pkt#pkt.sip, Pkt#pkt.sport}, Pkt#pkt.seq),
+		    Mss = case Pkt#pkt.mss of
+		        -1 -> ?DEFAULT_SMSS;
+		        N when N > Tcb#tcb.rmss -> Tcb#tcb.rmss;
+		        N -> N
+		    end,
+
+		    N_Tcb = clone(Tcb, {Pkt#pkt.sip, Pkt#pkt.sport}, Pkt#pkt.seq, Mss),
 		    tcp_pool:add({connect, Socket}, N_Tcb),
 		    Tcb#tcb{syn_queue = [N_Tcb | Tcb#tcb.syn_queue]}
 	    end
