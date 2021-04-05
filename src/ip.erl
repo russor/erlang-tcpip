@@ -25,7 +25,7 @@
 -module(ip).
 
 -import(checksum,[checksum/1, checksum_1/1]).
--export([start/4,start_writer/4,start_reader/2,init_reader/2,init_writer/4,recv/1,send/4, fragment/4,
+-export([start/4,start_writer/4,start_reader/2,init_reader/2,init_writer/4,recv/1,send/4, send/5, fragment/4,
 	 change_mtu/2, dst_unreachable/1, get_mtu/0]).
 
 -include("ip.hrl").
@@ -52,6 +52,9 @@ fragment(Frg_Id, Src_Ip, Protocol, Data) ->  % Completed fragmented packet
 
 send(Packet, Len, Protocol, Ip_Addr) ->
     catch ip_writer ! {send, Packet, Len, Protocol, Ip_Addr}.
+
+send(Packet, Len, Protocol, Src_Ip, Dst_Ip) ->
+    catch ip_writer ! {send, Packet, Len, Protocol, Src_Ip, Dst_Ip}.
 
 get_mtu() ->
     catch ip_writer ! {get_mtu}. %% eth:get_mtu(). % Should probably implement some way of having different link layer protocols here
@@ -92,8 +95,7 @@ reader_loop(Ip_Addr, NetMask) ->
 			update_mtu(Packet, MTU, Ip_Addr);
 		{dst_unr, Packet} ->
 			process_incoming_packet(dst_unr, Packet, Ip_Addr, NetMask);
-		_ ->
-			{error, failed}
+		_ -> ok
     end,
     reader_loop(Ip_Addr, NetMask).
 
@@ -101,6 +103,8 @@ writer_loop(Ip_Addr, NetMask, Default_Gateway, Module) ->
 	receive
             {send, Packet, Len, Protocol, Dst_Ip} ->
                 send_packet(Packet, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module);
+            {send, Packet, Len, Protocol, Src_Ip, Dst_Ip} ->
+                send_packet(Packet, Len, Protocol, Dst_Ip, Src_Ip, NetMask, Default_Gateway, Module);
             {get_mtu} ->
                 Module:get_mtu()
     end,
@@ -174,7 +178,7 @@ process_incoming_packet(Type, Packet, Ip_Addr, NetMask) ->
 		    case defragment(Frg_Id, Mf, Offset, Protocol,
 				    Src_Ip, Data) of
 			single_packet ->
-			    pop(Type, Protocol, Src_Ip, Ip_Addr, Data);
+			    pop(Type, Protocol, Src_Ip, Dst_Ip, Data);
 			fragment ->
 			    ok
 		    end;

@@ -26,72 +26,80 @@
 
 -import(checksum,[checksum/1]).
 -import(packet_check,[check_packet/4, compute_checksum/5]).
--export([start/1,start_reader/0,start_writer/1,init/1, init_reader/0, init_writer/1, recv/3, send/4, usr_open/3]).
+-export([start_link/0, init/1, recv/3, send/5, open/1, open/3]).
+-export([handle_call/3, handle_cast/2, handle_info/2]).
 
 -include("ip.hrl").
 %%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-start(Ip_Addr) ->
-    init(Ip_Addr).
-
-start_reader() ->
-    {ok, spawn_link(udp, init_reader, [])}.
-
-start_writer(Ip_Addr) ->
-    {ok, spawn_link(udp, init_writer, [Ip_Addr])}.
+start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 recv(Src_Ip, Dst_Ip, Data) ->
-    udp_reader ! {recv, Src_Ip, Dst_Ip, Data}.
+    gen_server:cast(?MODULE, {recv, Src_Ip, Dst_Ip, Data}).
 
-send(Dst_Ip, Dst_Port, Src_Port, Data) ->
-    udp_writer ! {send, Dst_Ip, Dst_Port, Src_Port, Data}.
+open(Lc_Port) -> gen_server:call(?MODULE, {open, Lc_Port, self()}).
+open(Lc_Port, Dst_Ip, Dst_Port) -> %% This will send incoming packets to Lc_Port from Dst_Ip, Dst_Port to the calling process as {udp, {Lc_Ip, Lc_Port, Dst_Ip, Dst_Port}, Data}
+    gen_server:call(?MODULE, {open, Lc_Port, Dst_Ip, Dst_Port, self()}).
 
-usr_open(Lc_Port, Dst_Ip, Dst_Port) -> %% This will send incoming packets to Lc_Port from Dst_Ip, Dst_Port to the calling process as {udp, {Lc_Ip, Lc_Port, Dst_Ip, Dst_Port}, Data}
-	udp_reader ! {open, Lc_Port, Dst_Ip, Dst_Port, self()}.
+send(Src_Ip, SPort, Dst_Ip, DPort, Data) ->
+    Len = size(Data) + 8,
+    Pre_Checksum = <<SPort:16/big-integer,
+		    DPort:16/big-integer,
+		    Len:16/big-integer>>,
+    Packet = <<Pre_Checksum/binary,
+	      0:16/big-integer,
+	      Data/binary>>,
+    Checksum = compute_checksum(Src_Ip, Dst_Ip, ?IP_PROTO_UDP, Packet, size(Packet)),
+    Checksum_Packet = <<Pre_Checksum/binary,
+		      Checksum:16/big-integer,
+		      Data/binary>>,
+    ip:send(Checksum_Packet, size(Checksum_Packet), udp, Src_Ip, Dst_Ip).
 
-%%%%%%%%%%%%%% Reader and Writer Loops %%%%%%%%%%%%%%
+%%%%%%%%%%%%%% Reader Loop %%%%%%%%%%%%%%
 
-% We need the ip here to be able to compute the checksum
-% as it includes a pseudo ip header. This should be fixed if
-% we want to support more than one ip
-init(Ip_Addr) ->
-    spawn(udp, init_reader, []),
-    spawn(udp, init_writer, [Ip_Addr]).
+init([]) ->
+    Table = ets:new(?MODULE, []),
+    {ok, Table}.
 
-init_reader() ->
-    register(udp_reader, self()),
-    reader_loop([]).
+handle_call({open, Lc_Port, Pid}, _From, Table) ->
+    {reply, open_impl(Table, Lc_Port, Pid), Table};
 
-init_writer(Ip_Addr) ->
-    register(udp_writer, self()),
-    writer_loop(Ip_Addr).
+handle_call({open, Lc_Port, Dst_Ip, Dst_Port, Pid}, _From, Table) ->
+    {reply, open_impl(Table, {Lc_Port, Dst_Ip, Dst_Port}, Pid), Table}.
 
-reader_loop(Conns) ->
-	receive
-		{recv, Src_Ip, Dst_Ip, Packet} ->
-			case catch decode(Src_Ip, Dst_Ip, Packet) of
-				{ok, Src_Ip, Dst_Ip, Src_Port, Dst_Port, Data} ->
-					case lists:keyfind({Dst_Port, Src_Ip, Src_Port},1,Conns) of
-						{_, P} ->
-							P ! {udp, {Dst_Ip, Dst_Port, Src_Ip, Src_Port}, Data};
-						false -> %% Packet received for which no one is listening. Ignore
-							ok
-					end;
-				{error, Error} ->
-					{error, Error}
-			end,
-			reader_loop(Conns);
-		{open, Lc_Port, Dst_Ip, Dst_Port, From} ->
-			N_Conn = {{Lc_Port, Dst_Ip, Dst_Port}, From},
-			reader_loop( [N_Conn | Conns -- [N_Conn]])
-	end.
+open_impl(Table, Key, Pid) ->
+    Ref = monitor(process, Pid),
+    case ets:insert_new(Table, {Key, Pid}) of
+        true ->
+            true = ets:insert_new(Table, {Ref, Key}),
+            ok;
+        false ->
+            demonitor(Ref),
+            {error, addrinuse}
+    end.
 
-writer_loop(Ip_Addr) ->
-    receive 
-	{send, Dst_Ip, Dst_Port, Src_Port, Data} ->
-	    send_packet(Dst_Ip, Dst_Port, Ip_Addr, Src_Port, Data)
+handle_cast({recv, Src_Ip, Loc_Ip, Packet}, Table) ->
+    case catch decode(Src_Ip, Loc_Ip, Packet) of
+	{ok, Src_Ip, Loc_Ip, Src_Port, Loc_Port, Data} ->
+	    case ets:lookup(Table, {Loc_Port, Src_Ip, Src_Port}) of
+	        [{_Key, Pid}] -> Pid ! {udp, {Loc_Ip, Loc_Port, Src_Ip, Src_Port}, Data};
+	        [] -> case ets:lookup(Table, Loc_Port) of
+	            [{_Key, Pid}] -> Pid ! {udp, {Loc_Ip, Loc_Port, Src_Ip, Src_Port}, Data};
+	            [] -> ok
+	        end
+	    end;
+	{error, Error} -> ok
+     end,
+     {noreply, Table}.
+
+handle_info({'DOWN', Ref, _Type, _Pid, _Info}, Table) ->
+    case ets:lookup(Table, Ref) of
+        [{Ref, Key}] ->
+            true = ets:delete(Table, Ref),
+            true = ets:delete(Table, Key);
+        [] -> ok
     end,
-    writer_loop(Ip_Addr).
+    {noreply, Table}.
 
 %%%%%%%%%%%%%% Reader Help Functions %%%%%%%%%%%%%%%%%%
 
@@ -108,18 +116,3 @@ decode(Src_Ip, Dst_Ip, Packet) when is_binary(Packet) ->
 	    {error, Error}
     end.
 
-%%%%%%%%%%%%%%%%% Writer Help Functions %%%%%%%%%%%%%%%%%%%
-
-send_packet(Dst_Ip, DPort, Src_Ip, SPort, Data) ->
-    Len = size(Data) + 8,
-    Pre_Checksum = <<SPort:16/big-integer,
-		    DPort:16/big-integer,
-		    Len:16/big-integer>>,
-    Packet = <<Pre_Checksum/binary,
-	      0:16/big-integer,
-	      Data/binary>>,
-    Checksum = compute_checksum(Src_Ip, Dst_Ip, ?IP_PROTO_UDP, Packet, size(Packet)),
-    Checksum_Packet = <<Pre_Checksum/binary, 
-		      Checksum:16/big-integer, 
-		      Data/binary>>,
-    ip:send(Checksum_Packet, size(Checksum_Packet), udp, Dst_Ip).

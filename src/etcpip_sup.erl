@@ -90,7 +90,7 @@ init([]) ->
         #{id => checksum,     start => {checksum, start_link, []}},
         #{id => ip_sup,       start => {ip_sup, start_link, [Ip, Netmask, Gateway, L2Module]}},
         #{id => icmp_sup,     start => {icmp_sup, start_link, []}},
-        #{id => udp_sup,      start => {udp_sup, start_link, [Ip]}},
+        #{id => udp,          start => {udp, start_link, []}},
         #{id => tcp_pool,     start => {tcp_pool, start_link, [Ip]}},
         #{id => iss,          start => {iss, start_link, []}},
         #{id => tcp,          start => {tcp, start_link, []}},
