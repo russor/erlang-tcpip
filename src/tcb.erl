@@ -48,8 +48,7 @@ start(closed, Rt_Ip, Rt_Port) ->
 clone(Tcb, Socket, Irs, Mss) ->
     Rcv_Next = seq:add(Irs, 1),
     {Rt_ip, Rt_port} = Socket,
-    % TODO: use secure random
-    Iss = rand:uniform(4294967296) - 1,
+    Iss = crypto:rand_uniform(0, 4294967296),
     N_Tcb=Tcb#tcb{syn_queue=[],
 		  open_queue=queue:new(),
 		  rt_ip = Rt_ip, rt_port = Rt_port,
