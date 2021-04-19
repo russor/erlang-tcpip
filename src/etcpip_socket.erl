@@ -72,6 +72,7 @@ set_sockopt(Con, Option, Parameter) ->
 
 init(Full, PhyModule, L2Module) ->
     Terms = application:get_all_env(etcpip),
+    {value, {iface, Iface}} = lists:keysearch(iface, 1, Terms),
     {value, {ip, EIp}} = lists:keysearch(ip, 1, Terms),
     {value, {netmask, ENetMask}} = lists:keysearch(netmask, 1, Terms),
     {value, {gateway, EGateWay}} = lists:keysearch(gateway, 1, Terms),
@@ -84,14 +85,17 @@ init(Full, PhyModule, L2Module) ->
 
     case Full of
         true->
-            eth:start(Mac, PhyModule),
+            eth_port:start_reader(Iface),
+            eth_port:start_writer(),
+            eth:start_reader(Mac),
+            eth:start_writer(Mac),
             arp:start(Ip, Mac);
         _ -> ok
     end,
     checksum:start(),
     ip:start(Ip, NetMask, GateWay, L2Module),
     icmp:start(),
-    udp:start(Ip),
+    udp:start_link(),
     tcp_pool:start(Ip),
     tcp:start().
 
