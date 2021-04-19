@@ -344,7 +344,7 @@ remove(listener_queue, From, Tcb) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init_tcb(Rt_Ip, Rt_Port, State) ->
-    Iss = iss:get_iss(),
+    Iss = crypto:rand_uniform(0, 4294967296),
     #tcb{
 	  rt_port = Rt_Port,
 	  rt_ip   = Rt_Ip,

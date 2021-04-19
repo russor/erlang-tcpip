@@ -92,7 +92,6 @@ init([]) ->
         #{id => icmp_sup,     start => {icmp_sup, start_link, []}},
         #{id => udp,          start => {udp, start_link, []}},
         #{id => tcp_pool,     start => {tcp_pool, start_link, [Ip]}},
-        #{id => iss,          start => {iss, start_link, []}},
         #{id => tcp,          start => {tcp, start_link, []}},
         #{id => tcp_sup,      start => {tcp_sup, start_link, []}},
 
