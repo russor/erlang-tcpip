@@ -154,8 +154,13 @@ route(Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module) -> % To be rewritten
 	    MTU = Module:get_mtu(),
 	    if 
 		(Dst_Ip band NetMask) == (Ip_Addr band NetMask) ->
-		    ets:insert(mtu, {Dst_Ip, Dst_Ip, MTU, 1}),
-		    {Dst_Ip, 1};
+		    Gateway = if
+		        Dst_Ip band (bnot NetMask) == 0 -> broadcast;
+		        Dst_Ip band (bnot NetMask) == 16#FFFFFFFF band (bnot NetMask) -> broadcast;
+		        true -> Dst_Ip
+		    end,
+		    ets:insert(mtu, {Dst_Ip, Gateway, MTU, 1}),
+		    {Gateway, 1};
 		true ->
 		    ets:insert(mtu, {Dst_Ip, Default_Gateway, MTU, 1}),
 		    {Default_Gateway, 1}

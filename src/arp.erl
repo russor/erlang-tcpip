@@ -101,6 +101,8 @@ init_writer(Ip, Mac) ->
 
 ip_queue_loop(Ip, Mac) ->
     receive
+		{send, Packet, broadcast} ->
+			send_packet(Packet, ?ETH_BROAD);
 		{send, Packet, Ip_Addr} -> %% Send a packet to Ip_Addr. Check if the address is in the arp cache, and enqueue the packet and send an arp request if it isn't
 			case catch ets:lookup_element(arp_cache, Ip_Addr, 2) of
 				{'EXIT', _} ->
