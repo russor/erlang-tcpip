@@ -25,8 +25,7 @@
 -module(etcpip_socket).
 
 -export([start/0, start/2, start_ip/1, open/3, open/4, listen/1, accept/1, recv/2, send/2,
-	 send/4, close/1, string_to_ip/1,
-         set_sockopt/3]).
+	 send/4, close/1, string_to_ip/1, new_ip/3, set_sockopt/3]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -98,6 +97,11 @@ init(Full, PhyModule, L2Module) ->
     udp:start_link(),
     tcp_pool:start(Ip),
     tcp:start().
+
+new_ip(Ip, NetMask, GateWay) ->
+    arp:new_ip(Ip),
+    ip:new_ip(Ip, NetMask, GateWay),
+    tcp_pool:new_ip(Ip).
 
 %% Stack is IPv4 only...
 map_ip({A, B, C, D}) ->

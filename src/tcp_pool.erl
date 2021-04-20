@@ -24,7 +24,7 @@
 
 -module(tcp_pool).
 
--export([start/1,start_link/1,add_ip/1,init/1,get/1,add/2,remove/1]).
+-export([start/1,start_link/1,init/1,get/1,add/2,remove/1, new_ip/1]).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%
@@ -34,9 +34,6 @@ start(Ip) ->
 
 start_link(Ip) ->
     {ok, spawn_link(tcp_pool, init, [Ip])}.
-
-add_ip(Ip) ->
-    tcp_pool_sup:add_ip(Ip).
 
 get(Socket) ->
     tcp_pool ! {get, Socket, self()},
@@ -67,31 +64,40 @@ init(Ip) ->
     ets:new(tcp_pool, [set, private, named_table]),
     loop(Ip).
 
+new_ip(Ip) ->
+    tcp_pool ! {new_ip, Ip}.
+
 loop(Ip) ->
-    receive
+    Ip2 = receive
+        {new_ip, NewIp} -> NewIp;
 	{get, Socket, From} ->
 	    case catch ets:lookup_element(tcp_pool, Socket, 2) of
 		{'EXIT', _} ->
 		    From ! {tcp_pool, error, no_connection};
 		Conn ->
 		    From ! {tcp_pool, ok, Socket, Conn}
-	    end;
+	    end,
+	    Ip;
 	{add, remote, R_Socket, Conn, From} ->
 	    {Rt_Ip, Rt_Port} = R_Socket,
 	    Lc_Port = find_free_port(Ip, Rt_Ip, Rt_Port),
 	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
-	    From ! {tcp_pool, ok, Ip, Lc_Port};
+	    From ! {tcp_pool, ok, Ip, Lc_Port},
+	    Ip;
 	{add, local, Lc_Port, Conn, From} ->
-	    ets:insert(tcp_pool, {{Ip, Lc_Port}, Conn}),
-	    From ! {tcp_pool, ok, Ip, Lc_Port};
+	    ets:insert(tcp_pool, {{any, Lc_Port}, Conn}),
+	    From ! {tcp_pool, ok, any, Lc_Port},
+	    Ip;
 	{add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn, From} ->
 	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
-	    From ! {tcp_pool, ok, Ip, Lc_Port};
+	    From ! {tcp_pool, ok, Ip, Lc_Port},
+	    Ip;
 	{remove, Socket} ->
             lists:foreach(fun(S) -> ets:delete_object(tcp_pool, S) end,
-                          ets:match_object(tcp_pool, {'_', Socket}))
+                          ets:match_object(tcp_pool, {'_', Socket})),
+            Ip
     end,
-    loop(Ip).
+    loop(Ip2).
 
 find_free_port(Lc_Ip, Rt_Ip, Rt_Port) ->
     find_free_port_1(Lc_Ip, Rt_Ip, Rt_Port, 1000).

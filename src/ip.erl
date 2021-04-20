@@ -24,9 +24,8 @@
 
 -module(ip).
 
--import(checksum,[checksum/1, checksum_1/1]).
 -export([start/4,start_writer/4,start_reader/2,init_reader/2,init_writer/4,recv/1,send/4, send/5, fragment/4,
-	 change_mtu/2, dst_unreachable/1, get_mtu/0]).
+	 change_mtu/2, dst_unreachable/1, get_mtu/0, new_ip/3]).
 
 -include("ip.hrl").
 
@@ -73,6 +72,10 @@ init(Ip_Addr, NetMask, Default_Gateway, Module) ->
     spawn_link(ip, init_writer, [Ip_Addr, NetMask, Default_Gateway, Module]),
     spawn_link(ip, init_reader, [Ip_Addr, NetMask]).
 
+new_ip(Ip, NetMask, Gateway) ->
+    ip_reader ! {new_ip, Ip, NetMask},
+    ip_writer ! {new_ip, Ip, NetMask, Gateway}.
+
 init_reader(Ip_Addr, NetMask) ->
     register(ip_reader, self()),
     ets:new(ip_fragment, [set, private, named_table]),
@@ -85,37 +88,46 @@ init_writer(Ip_Addr, NetMask, Default_Gateway, Module) ->
     writer_loop(Ip_Addr, NetMask, Default_Gateway, Module).
 
 reader_loop(Ip_Addr, NetMask) ->
-    receive
+    {Ip2, NM2} = receive
+                {new_ip, NewIp, NewNetMask} -> {NewIp, NewNetMask};
 		{recv, Packet} when is_binary(Packet) ->
-			process_incoming_packet(recv, Packet, Ip_Addr, NetMask);
+			process_incoming_packet(recv, Packet, Ip_Addr, NetMask),
+			{Ip_Addr, NetMask};
 		{fragment, Frg_Id, Src_Ip, Protocol, Data} ->
 			delete_fragment(Frg_Id, Src_Ip),
-			pop(recv, Protocol, Src_Ip, Ip_Addr, Data);
+			pop(recv, Protocol, Src_Ip, Ip_Addr, Data),
+			{Ip_Addr, NetMask};
 		{mtu, Packet, MTU} -> % An ICMP DF Set and Must fragment Received
-			update_mtu(Packet, MTU, Ip_Addr);
+			update_mtu(Packet, MTU, Ip_Addr),
+			{Ip_Addr, NetMask};
 		{dst_unr, Packet} ->
-			process_incoming_packet(dst_unr, Packet, Ip_Addr, NetMask);
-		_ -> ok
+			process_incoming_packet(dst_unr, Packet, Ip_Addr, NetMask),
+			{Ip_Addr, NetMask};
+		_ -> {Ip_Addr, NetMask}
     end,
-    reader_loop(Ip_Addr, NetMask).
+    reader_loop(Ip2, NM2).
 
 writer_loop(Ip_Addr, NetMask, Default_Gateway, Module) ->
-	receive
+    {Ip2, NM2, GW2} = receive
+	    {new_ip, NewIp, NewNetMask, NewGateWay} -> {NewIp, NewNetMask, NewGateWay};
             {send, Packet, Len, Protocol, Dst_Ip} ->
-                send_packet(Packet, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module);
+                send_packet(Packet, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module),
+                {Ip_Addr, NetMask, Default_Gateway};
             {send, Packet, Len, Protocol, Src_Ip, Dst_Ip} ->
-                send_packet(Packet, Len, Protocol, Dst_Ip, Src_Ip, NetMask, Default_Gateway, Module);
+                send_packet(Packet, Len, Protocol, Dst_Ip, Src_Ip, NetMask, Default_Gateway, Module),
+                {Ip_Addr, NetMask, Default_Gateway};
             {get_mtu} ->
-                Module:get_mtu()
+                Module:get_mtu(),
+                {Ip_Addr, NetMask, Default_Gateway}
     end,
-    writer_loop(Ip_Addr, NetMask, Default_Gateway, Module).
+    writer_loop(Ip2, NM2, GW2, Module).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 send_packet(Data, Len, Protocol, Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module) ->
     {Gateway, DF} = route(Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module),
     {Pre_Chk, Post_Chk} = build_header(Len, Protocol, Dst_Ip, Ip_Addr, DF),
-    Checksum = checksum_1([Pre_Chk, Post_Chk]),
+    Checksum = checksum:checksum_1([Pre_Chk, Post_Chk]),
     Packet = [Pre_Chk, <<Checksum:16/integer>>, Post_Chk, Data],
     Module:send(Packet, Gateway).
 
@@ -153,7 +165,7 @@ route(Dst_Ip, Ip_Addr, NetMask, Default_Gateway, Module) -> % To be rewritten
 	_ ->
 	    MTU = Module:get_mtu(),
 	    if
-	        Dst_IP == 16#FFFFFFFF ->
+	        Dst_Ip == 16#FFFFFFFF ->
 	            ets:insert(mtu, {Dst_Ip, broadcast, MTU, 1}),
                     {broadcast, 1};
 		(Dst_Ip band NetMask) == (Ip_Addr band NetMask) ->
@@ -232,7 +244,7 @@ update_mtu(Packet, MTU, Ip_Addr) ->
 %% Asume no options for decoding at first.
 decode(Packet) ->
     <<Header:20/binary,Data/binary>> = Packet,
-    case checksum_1(Header) of
+    case checksum:checksum_1(Header) of
 	16#0 -> % Checksum ok
 	    analize(Header, Data);
 	_ -> % Ok, look if we failed checksum due to options
@@ -243,7 +255,7 @@ decode(Packet) ->
 		    {error, bad_checksum};
 		true ->
 		    <<Header_1:Hd_Len/binary, Data_1/binary>> = Packet,
-		    case checksum_1(Header_1) of
+		    case checksum:checksum_1(Header_1) of
 			16#0 ->
 			    analize(Header_1, Data_1);
 			_ ->

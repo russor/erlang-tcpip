@@ -47,11 +47,12 @@ start(closed, Rt_Ip, Rt_Port) ->
 
 clone(Tcb, Socket, Irs, Mss) ->
     Rcv_Next = seq:add(Irs, 1),
-    {Rt_ip, Rt_port} = Socket,
+    {Lc_ip, _Lc_port, Rt_ip, Rt_port} = Socket,
     Iss = crypto:rand_uniform(0, 4294967296),
     N_Tcb=Tcb#tcb{syn_queue=[],
 		  open_queue=queue:new(),
 		  rt_ip = Rt_ip, rt_port = Rt_port,
+		  lc_ip = Lc_ip,
 		  rcv_nxt = Rcv_Next,
 		  irs = Irs, snd_wl1 = Irs, snd_wl2 = Rcv_Next,
 		  state = syn_rcvd,
@@ -451,7 +452,7 @@ in(listen, Tcb, Pkt) ->
 		        N -> N
 		    end,
 
-		    N_Tcb = clone(Tcb, {Pkt#pkt.sip, Pkt#pkt.sport}, Pkt#pkt.seq, Mss),
+		    N_Tcb = clone(Tcb, Socket, Pkt#pkt.seq, Mss),
 		    tcp_pool:add({connect, Socket}, N_Tcb),
 		    Tcb#tcb{syn_queue = [N_Tcb | Tcb#tcb.syn_queue]}
 	    end

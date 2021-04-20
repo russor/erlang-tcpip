@@ -87,7 +87,7 @@ demux_packet(Pkt) ->
 	{ok, Conn} ->
 	    gen_server:cast(Conn, {in, Pkt});
 	{error, _} -> % Try to find a passive connection (Incoming syn?)
-	    case tcp_pool:get({Pkt#pkt.dip, Pkt#pkt.dport}) of
+	    case tcp_pool:get({any, Pkt#pkt.dport}) of
 		{ok, Conn} ->
 		    gen_server:cast(Conn, {in, Pkt});
 		{error, Error} ->

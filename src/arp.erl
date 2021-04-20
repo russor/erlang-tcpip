@@ -25,7 +25,7 @@
 -module(arp).
 
 -export([start/2, start_reader/2, start_writer/2, start_ip_queue/2, init_reader/2, init_writer/2, ip_queue_init/2, send/2, answer/2, solve/1, recv/1,
-         get_mtu/0]).
+         get_mtu/0, new_ip/1]).
 
 -include("eth.hrl").
 
@@ -85,6 +85,9 @@ init(Ip, Mac) ->
     spawn(arp, init_writer, [Ip, Mac]),
     spawn(arp, ip_queue_init, [Ip, Mac]).
 
+new_ip(Ip) ->
+    arp_reader ! arp_writer ! ip_queue ! {new_ip, Ip}.
+
 ip_queue_init(Ip, Mac) -> 
     %% This process stores outgoing packets which have to wait for an arp reply
     ets:new(ip_queue,[bag, private, named_table]),
@@ -100,9 +103,10 @@ init_writer(Ip, Mac) ->
     writer_loop(Ip, Mac).
 
 ip_queue_loop(Ip, Mac) ->
-    receive
+    Ip2 = receive
 		{send, Packet, broadcast} ->
-			send_packet(Packet, ?ETH_BROAD);
+			send_packet(Packet, ?ETH_BROAD),
+			Ip;
 		{send, Packet, Ip_Addr} -> %% Send a packet to Ip_Addr. Check if the address is in the arp cache, and enqueue the packet and send an arp request if it isn't
 			case catch ets:lookup_element(arp_cache, Ip_Addr, 2) of
 				{'EXIT', _} ->
@@ -112,30 +116,37 @@ ip_queue_loop(Ip, Mac) ->
 					queue(Ip_Addr, Packet);
 				Mac_Addr ->
 					send_packet(Packet, Mac_Addr)
-			end;
+			end,
+			Ip;
 		{arp, Ip_Addr, Mac_Addr} ->
 			Packets = dequeue(Ip_Addr),
-			lists:foreach(fun(Packet) -> send_packet(Packet, Mac_Addr) end, Packets)
+			lists:foreach(fun(Packet) -> send_packet(Packet, Mac_Addr) end, Packets),
+			Ip;
+		{new_ip, NewIp} -> NewIp
 	end,
-    ip_queue_loop(Ip, Mac).
+    ip_queue_loop(Ip2, Mac).
     
 reader_loop(Ip, Mac) ->
-    receive
+    Ip2 = receive
+                {new_ip, NewIp} -> NewIp;
 		Packet when is_binary(Packet) ->
-			catch decode(Packet, Ip, Mac); %% The catch makes it ignore errors if the received packet is not a correct arp packet. Log?
-		_ ->
-			{error, not_binary} 
+			catch decode(Packet, Ip, Mac), %% The catch makes it ignore errors if the received packet is not a correct arp packet. Log?
+			Ip;
+		_ -> Ip
     end,
-    reader_loop(Ip, Mac).
+    reader_loop(Ip2, Mac).
 
 writer_loop(Ip, Mac) ->
-    receive
+    Ip2 = receive
+        {new_ip, NewIp} -> NewIp;
 	{solve, Ip_Dst} ->
-	    send_arp(Ip_Dst, Ip, Mac);
+	    send_arp(Ip_Dst, Ip, Mac),
+	    Ip;
 	{answer, Ip_Dst, Mac_Dst} ->
-	    send_arp(Ip_Dst, Mac_Dst, Ip, Mac)
+	    send_arp(Ip_Dst, Mac_Dst, Ip, Mac),
+	    Ip
     end,
-    writer_loop(Ip, Mac).
+    writer_loop(Ip2, Mac).
 
 %%%%%%%%%%%%% Reader Help Functions %%%%%%%%%%%%%%%%%%%%%
 
