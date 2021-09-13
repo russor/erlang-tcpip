@@ -24,7 +24,7 @@
 
 -module(tcb).
 
--export([start/3, start/2, init/2, init/3, subscribe/2, unsubscribe/2]).
+-export([start/3, start/2, init/2, init/3]).
 -export([handle_info/2, handle_cast/2, handle_call/3]).
 -export([set_snd_wnd/2, set_snd_una/2, set_del_ack/2,
          set_rqueue/2, set_state/2,
@@ -39,11 +39,12 @@
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-start(listen, Port) ->
-    proc_lib:spawn_link(tcb, init, [listen, Port]).
+start(listen, Port) -> proc_lib:spawn_link(tcb, init, [listen, Port]);
 
-start(closed, Rt_Ip, Rt_Port) ->
-    proc_lib:spawn_link(tcb, init, [closed, Rt_Ip, Rt_Port]).
+start(new, Options) -> proc_lib:spawn_link(tcb, init, [new, Options]).
+
+start(new, Rt_Ip, Rt_Port) ->
+    proc_lib:spawn_link(tcb, init, [new, Rt_Ip, Rt_Port]).
 
 clone(Tcb, Socket, Irs, Mss) ->
     Rcv_Next = seq:add(Irs, 1),
@@ -65,39 +66,32 @@ clone(Tcb, Socket, Irs, Mss) ->
     NTcb_Proc = proc_lib:spawn(tcb, init, [N_Tcb, self()]),
     NTcb_Proc.
 
-subscribe(Tcb, Attr) ->
-    Tcb ! {subscribe, Attr, self()},
-    receive
-	{tcb, ok} ->
-	    ok
-    end.
-
-unsubscribe(Tcb, Attr) ->
-    Tcb ! {unsubscribe, Attr, self()}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init(listen, Lc_Port) ->
-    Tcb = init_tcb(-1, -1, listen),
-    {ok, Lc_Ip, Lc_Port} = tcp_pool:add({local, Lc_Port}, self()),
+    process_flag(trap_exit, true),
+    Tcb = init_tcb(0, 0, listen),
+    {ok, Lc_Ip, Lc_Port} = tcp_pool:add({local, {0, Lc_Port}}, self()),
     Tcb1 = Tcb#tcb{lc_ip = Lc_Ip, lc_port = Lc_Port},
     gen_server:enter_loop(?MODULE, [], Tcb1);
 
+init(new, Options) ->
+    process_flag(trap_exit, true),
+    Options = #{},
+    Tcb = init_tcb(0, 0, new),
+    gen_server:enter_loop(?MODULE, [], Tcb);
+
 % from clone in listen, need to send synack
 init(Tcb, _Parent) ->
+    process_flag(trap_exit, true),
     {noreply, Tcb1} = send_packet(Tcb),
     gen_server:enter_loop(?MODULE, [], Tcb1).
 
-init(closed, Rt_Ip, Rt_Port) ->
-    Tcb = init_tcb(Rt_Ip, Rt_Port, closed),
+init(new, Rt_Ip, Rt_Port) ->
+    process_flag(trap_exit, true),
+    Tcb = init_tcb(Rt_Ip, Rt_Port, new),
     gen_server:enter_loop(?MODULE, [], Tcb).
-
-handle_info({subscribe, Param, From}, Tcb) ->
-    From ! {tcb,ok},
-    send_packet(add(Param, From, Tcb));
-
-handle_info({unsubscribe, Param, From}, Tcb) ->
-    send_packet(remove(Param, From, Tcb));
 
 handle_info({state, established, Socket}, Tcb) ->
     send_packet(set_open_queue(Tcb, Socket));
@@ -150,12 +144,60 @@ handle_call(close, From, Tcb) ->
     end,
     Tcb1 = set_state(Tcb#tcb{send_fin = 1, send_type = any, snd_max = seq:add(Tcb#tcb.snd_max, 1)}, NewState),
     gen_server:reply(From, ok),
-    send_packet(Tcb1).
+    send_packet(Tcb1);
+
+handle_call({bind, #{addr := InetAddr, family := inet, port := Port} = SockAddr}, _From, Tcb) ->
+    Addr = etcpip_socket:map_ip(InetAddr),
+    {reply, ok, Tcb#tcb{lc_port = Port, lc_ip = Addr}};
+
+% TODO: Backlog
+handle_call({listen, _Backlog}, _From, Tcb) ->
+    Reply = case Tcb#tcb.lc_port of
+        N when is_integer(N), N > 0, N < 65536 ->
+            case tcp_pool:add({local, {Tcb#tcb.lc_ip, Tcb#tcb.lc_port}}, self()) of
+                {ok, _, _} -> ok;
+                Other -> Other
+            end;
+        _ -> {error, badarg}
+    end,
+    {reply, Reply, Tcb};
+
+handle_call({accept, Timeout}, From, Tcb) ->
+    case queue:out_r(Tcb#tcb.open_queue) of
+	{empty, _} when Timeout == infinity ->
+		{noreply, Tcb#tcb{obs=queue:cons(From, Tcb#tcb.obs)}};
+%	{empty, _} when Timeout == nowait ->
+%		{Pid, Tag} = From,
+%		SelectRef = make_ref(),
+%		{reply, {select, {select_info, SelectRef, SelectRef}},
+%			Tcb#tcb{obs=queue:cons({nowait, Pid, SelectRef}, Tcb#tcb.obs)}};
+	{empty, _} -> % TODO timeouts/select info!
+		{noreply, Tcb#tcb{obs=queue:cons(From, Tcb#tcb.obs)}};
+	{{value, Socket}, Q2} ->
+		{reply, {ok, Socket}, Tcb#tcb{open_queue = Q2}}
+    end;
+
+% TODO: option validity
+handle_call({setopt, {socket, reuseaddr}, _Val}, _From, Tcb) ->
+    {reply, ok, Tcb};
+
+handle_call({setopt, {otp, meta}, Map}, _From, Tcb) ->
+    NewTcb = maps:fold(fun(Key, Val, T) ->
+        {reply, ok, T2} = handle_call({setopt, {otp, Key}, Val}, {}, T),
+        T2
+    end, Tcb, Map),
+    {reply, ok, NewTcb};
+
+handle_call({setopt, {otp, Key}, Val}, _From, Tcb = #tcb{options = Options}) ->
+    {reply, ok, Tcb#tcb{options = Options#{{otp, Key} => Val}}}.
+
+
 
 handle_cast({in, Pkt}, Tcb) ->
     send_packet(in(Tcb#tcb.state, Tcb, Pkt)).
 
 send_packet(Tcb = #tcb{state = closed}) ->
+    % TODO: remove from tcp_pool
     {stop, normal, Tcb};
 send_packet(Tcb = #tcb{send_type = ack}) ->
     send_packet(send_packet_impl(Tcb#tcb{send_type = none}, ack));
@@ -315,32 +357,24 @@ set_rdata(Tcb, Data) ->
     end.
 
 set_open_queue(Tcb, Socket) ->
-    N_syn_queue = lists:filter(fun (X) -> if X==Socket -> false; 
-					     true -> true end end,
-			       Tcb#tcb.syn_queue),
+    N_syn_queue = lists:filter(fun
+        (X) when X == Socket -> false;
+        (_) -> true
+    end, Tcb#tcb.syn_queue),
     case queue:out_r(Tcb#tcb.obs) of
         {{value, O}, New_Q} ->
-            O ! {open_con, Socket},
+            gen_server:reply(O, {ok, Socket}),
             Tcb#tcb{syn_queue = N_syn_queue, obs = New_Q};
-        {empty, _New_Q} ->
+        {empty, _} ->
             Tcb#tcb{syn_queue = N_syn_queue,
-                     open_queue = queue:cons(Socket, Tcb#tcb.open_queue)}
+                    open_queue = queue:cons(Socket, Tcb#tcb.open_queue)}
     end.
-    
+
 
 %%%%%%%%%%%%%%%%%%%%% Observer add and remove %%%%%%%%%%%%%%%%%%%%%%%
 
-add(listener_queue, From, Tcb) ->
-    Tcb1 = Tcb#tcb{obs=queue:cons(From, Tcb#tcb.obs)},
-    case queue:out_r(Tcb#tcb.open_queue) of
-	{empty, _} -> Tcb1;
-	{{value, Socket}, Q2} ->
-	    From ! {open_con, Socket},
-	    Tcb#tcb{open_queue = Q2}
-    end.
-
-remove(listener_queue, From, Tcb) ->
-    Tcb#tcb{obs = queue:filter(fun(O) -> O =/= From end, Tcb#tcb.obs)}.
+%remove(listener_queue, From, Tcb) ->
+%    Tcb#tcb{obs = queue:filter(fun(O) -> O =/= From end, Tcb#tcb.obs)}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

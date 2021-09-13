@@ -37,9 +37,9 @@ start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 recv(Src_Ip, Dst_Ip, Data) ->
     gen_server:cast(?MODULE, {recv, Src_Ip, Dst_Ip, Data}).
 
-open(Lc_Port) -> gen_server:call(?MODULE, {open, Lc_Port, self()}).
+open(Lc_Port) -> gen_server:call(?MODULE, {open, Lc_Port, self()}, infinity).
 open(Lc_Port, Dst_Ip, Dst_Port) -> %% This will send incoming packets to Lc_Port from Dst_Ip, Dst_Port to the calling process as {udp, {Lc_Ip, Lc_Port, Dst_Ip, Dst_Port}, Data}
-    gen_server:call(?MODULE, {open, Lc_Port, Dst_Ip, Dst_Port, self()}).
+    gen_server:call(?MODULE, {open, Lc_Port, Dst_Ip, Dst_Port, self()}, infinity).
 
 send(Src_Ip, SPort, Dst_Ip, DPort, Data) ->
     Len = size(Data) + 8,

@@ -38,10 +38,10 @@
 -record(tcb, {
 	  client,                       % client process
 
-	  lc_port   = -1,               % local port number
-	  rt_port   = -1,               % remote port number
-	  lc_ip     = -1,               % local ip
-	  rt_ip     = -1,               % remote ip
+	  lc_port   = 0,               % local port number
+	  rt_port   = 0,               % remote port number
+	  lc_ip     = 0,               % local ip
+	  rt_ip     = 0,               % remote ip
 
 	  state,                        % connection state
 	  maxsbsize = ?MAX_SND_BUFFER,  % maximum size of send buffer
@@ -89,6 +89,7 @@
 	                                %   listen sockets
 	  open_queue= queue:new(),      % queue of established connections for
 	                                %   listen sockets
+	  options   = #{},
 	  obs = queue:new(),
 	  send_type = none
 }).

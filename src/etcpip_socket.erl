@@ -24,21 +24,20 @@
 
 -module(etcpip_socket).
 
--export([start/0, start/2, start_ip/1, open/3, open/4, listen/1, accept/1, recv/2, send/2,
-	 send/4, close/1, string_to_ip/1, new_ip/3, set_sockopt/3]).
+-export([start/0, start/2, start_ip/1, open/2, open/3, open/4, listen/1, accept/1, accept/2, recv/2, send/2,
+	 send/4, close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, map_ip/1, listen/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
 
-start() ->
-    {ok, Iface} = application:get_env(etcpip, iface),
-    % eth_port:start(Iface),
-    init(true, eth_port, arp).
+start() -> init(true, eth_port, arp).
 
 start(PhyModule, L2Module) ->
     init(true, PhyModule, L2Module).
 
 start_ip(L2Module) ->
     init(false, unknown, L2Module).
+
+open(tcp, Options) -> tcb:start(new, Options).
 
 open(tcp, Dst_Ip, Dst_Port) ->
     tcp_con:usr_open(Dst_Ip, Dst_Port).
@@ -48,28 +47,31 @@ open(udp, Lc_Port, Dst_Ip, Dst_Port) -> %% Udp
 
 listen(Src_Port) -> tcb:start(listen, Src_Port).
 
-accept(ListenConn) ->
-    tcp_con:usr_accept(ListenConn).
+accept(ListenConn) -> accept(ListenConn, infinity).
+accept(ListenConn, Timeout) -> gen_server:call(ListenConn, {accept, Timeout}, infinity).
 
-recv(Conn, Bytes) -> gen_server:call(Conn, {read, Bytes}).
+recv(Conn, Bytes) -> gen_server:call(Conn, {read, Bytes}, infinity).
 
-send(Conn, Data) -> gen_server:call(Conn, {queue, Data}).
+send(Conn, Data) -> gen_server:call(Conn, {queue, Data}, infinity).
 
 send(Src_Port, Dst_Ip, Dst_Port, Data) -> %% Udp
     udp:send(Dst_Ip, Dst_Port, Src_Port, Data).
 
-close(Conn) -> gen_server:call(Conn, close).
+close(Conn) -> gen_server:call(Conn, close, infinity).
+
+bind(Conn, Addr) -> gen_server:call(Conn, {bind, Addr}, infinity).
+
+listen(Conn, Backlog) -> gen_server:call(Conn, {listen, Backlog}, infinity).
 
 string_to_ip(Ip) ->
     T = string:tokens(Ip, "."),
     lists:foldl(fun (N, Acc) -> {N2, _} = string:to_integer(N), Acc*256+N2 end, 0, T).
 
-set_sockopt(Con, Option, Parameter) ->
-    tcp_con:usr_sockopt(Con, Option, Parameter).
+setopt(Con, Option, Parameter) -> gen_server:call(Con, {setopt, Option, Parameter}, infinity).
     
 %%%%%%%%%%%%%%%%%%%%%%% INTERNAL FUNCTIONS %%%%%%%%%%%%%%%%%%
 
-init(Full, PhyModule, L2Module) ->
+init(Full, _PhyModule, L2Module) ->
     Terms = application:get_all_env(etcpip),
     {value, {iface, Iface}} = lists:keysearch(iface, 1, Terms),
     {value, {ip, EIp}} = lists:keysearch(ip, 1, Terms),

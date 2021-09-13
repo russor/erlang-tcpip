@@ -38,7 +38,7 @@ start_link(Ip) ->
 get(Socket) ->
     tcp_pool ! {get, Socket, self()},
     receive
-	{tcp_pool, ok, Socket, Conn} ->
+	{tcp_pool, ok, Conn} ->
 	    {ok, Conn};
 	{tcp_pool, error, no_connection} ->
 	    {error, no_connection}
@@ -61,21 +61,27 @@ remove(Socket) ->
 
 init(Ip) ->
     register(tcp_pool, self()),
-    ets:new(tcp_pool, [set, private, named_table]),
+    ets:new(tcp_pool, [set, public, named_table]),
     loop(Ip).
 
 new_ip(Ip) ->
     tcp_pool ! {new_ip, Ip}.
 
+lookup([]) -> [];
+lookup([Socket | T]) ->
+    case catch (ets:lookup(tcp_pool, Socket)) of
+        [] -> lookup(T);
+        Other -> Other
+    end;
+lookup(Socket) -> lookup([Socket]).
+
 loop(Ip) ->
     Ip2 = receive
         {new_ip, NewIp} -> NewIp;
 	{get, Socket, From} ->
-	    case catch ets:lookup_element(tcp_pool, Socket, 2) of
-		{'EXIT', _} ->
-		    From ! {tcp_pool, error, no_connection};
-		Conn ->
-		    From ! {tcp_pool, ok, Socket, Conn}
+	    case lookup(Socket) of
+	        [] -> From ! {tcp_pool, error, no_connection};
+	        [{_, Conn}] -> From ! {tcp_pool, ok, Conn}
 	    end,
 	    Ip;
 	{add, remote, R_Socket, Conn, From} ->
@@ -84,9 +90,11 @@ loop(Ip) ->
 	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
 	    From ! {tcp_pool, ok, Ip, Lc_Port},
 	    Ip;
-	{add, local, Lc_Port, Conn, From} ->
-	    ets:insert(tcp_pool, {{any, Lc_Port}, Conn}),
-	    From ! {tcp_pool, ok, any, Lc_Port},
+	{add, local, {Lc_Addr, Lc_Port}, Conn, From} ->
+	    case ets:insert_new(tcp_pool, {{Lc_Addr, Lc_Port}, Conn}) of
+	        true -> From ! {tcp_pool, ok, Lc_Addr, Lc_Port};
+	        false -> From ! {tcp_pool, {error, eaddrinuse}}
+	    end,
 	    Ip;
 	{add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn, From} ->
 	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),

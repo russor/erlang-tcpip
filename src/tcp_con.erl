@@ -24,7 +24,7 @@
 
 -module(tcp_con).
 
--export([usr_accept/1, new_mtu/2]).
+-export([new_mtu/2]).
 
 -include("tcb.hrl").
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API FOR APPLICATION LEVEL PROTOCOLS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -58,16 +58,3 @@ new_mtu({Tcb, _, _}, MTU) -> % For PMTU discovery.
 %    New_Data_Avail = procces_msg(Tcb, State, {send, Def_Msg}),
 %    {Timeout, _Def_Msg} = check_send(Tcb, State, New_Data_Avail),
 %    {noreply, {writer, Tcb, State, New_Data_Avail}, Timeout}.
-
-%%%%%%%%%%%%%%%%%%%%% User Commands %%%%%%%%%%%%%%%%%%%%
-
-usr_accept(Tcb) ->
-    tcb:subscribe(Tcb, listener_queue),
-    receive
-        {open_con, closed} ->
-            %% Listen socket was closed...
-            closed;
-        {open_con, Socket} ->
-            link(Socket),
-            Socket
-    end.

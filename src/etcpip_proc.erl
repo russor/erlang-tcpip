@@ -20,7 +20,7 @@
 start_link(Name, Spec) ->
     gen_server:start_link({local, Name}, ?MODULE, Spec, []).
 
-call(Name, Call) -> gen_server:call(Name, Call).
+call(Name, Call) -> gen_server:call(Name, Call, infinity).
 
 cast(Name, Cast) -> gen_server:cast(Name, Cast).
 
