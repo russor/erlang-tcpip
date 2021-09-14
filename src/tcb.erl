@@ -111,7 +111,13 @@ handle_call({queue, Data}, From, Tcb) ->
     gen_server:reply(From, Reply),
     send_packet(Tcb1);
 
-handle_call({read, Bytes}, From, Tcb) ->
+handle_call({recv, Length}, From, Tcb) when is_integer(Length)-> handle_call({recv, Length, [], infinity}, From, Tcb);
+handle_call({recv, Flags}, From, Tcb) when is_list(Flags) -> handle_call({recv, 0, Flags, infinity}, From, Tcb);
+handle_call({recv, Length, Flags}, From, Tcb) when is_list(Flags) -> handle_call({recv, Length, Flags, infinity}, From, Tcb);
+handle_call({recv, Flags, Timeout}, From, Tcb) when is_list(Flags) -> handle_call({recv, 0, Flags, Timeout}, From, Tcb);
+handle_call({recv, Length, Timeout}, From, Tcb) when is_integer(Length) -> handle_call({recv, Length, [], Timeout}, From, Tcb);
+
+handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == [] ->
     case Tcb#tcb.state of
 	closing -> {reply, {error, connect_closing}, Tcb};
 	last_ack -> {reply, {error, connect_closing}, Tcb};
@@ -119,8 +125,8 @@ handle_call({read, Bytes}, From, Tcb) ->
 	listen -> {reply, {error, no_connection}, Tcb};
 	close_wait when Tcb#tcb.rbsize == 0 -> {reply, {error, connection_closing}, Tcb};
 	_ ->
-	    if Bytes == 0 orelse Tcb#tcb.rbsize > 0 ->
-		Size = ?min(Bytes, Tcb#tcb.rbsize),
+	    if Length == 0 orelse Tcb#tcb.rbsize > 0 ->
+		Size = ?min(Length, Tcb#tcb.rbsize),
 		{Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
 		New_Size = Tcb#tcb.rbsize - Size,
 		Free_Buf = ?max(Tcb#tcb.maxrbsize-New_Size, 0),
@@ -131,7 +137,7 @@ handle_call({read, Bytes}, From, Tcb) ->
 		gen_server:reply(From, Data),
 		send_packet(Tcb1);
 	    true ->
-	        send_packet(Tcb#tcb{obs = {From, Bytes}})
+	        send_packet(Tcb#tcb{obs = {From, Length}})
 	    end
     end;
 
@@ -349,8 +355,8 @@ set_rdata(Tcb, Data) ->
 		      rcv_nxt = Rcv_Nxt, rcv_wnd = Rcv_Wnd, obs = {}},
     case Tcb#tcb.obs of
 	{} -> Tcb1;
-	{From, Bytes} ->
-	    case handle_call({read, Bytes}, From, Tcb1) of
+	{From, Length} ->
+	    case handle_call({recv, Length}, From, Tcb1) of
 	        {noreply, Tcb2} -> Tcb2;
 	        {noreply, Tcb2, _Timeout} -> Tcb2
 	    end
@@ -539,7 +545,7 @@ process_packet(Tcb, Pkt, State) ->
         % sequence acceptable
 	{ok, Rcv_Nxt, Data} -> process_ack(Tcb, Pkt, State, Rcv_Nxt, Data);
 	{error, _} ->
-	    io:format("seq challenge ack~w~w~n", [Tcb, Pkt]),
+	    io:format("seq challenge ack~w~w~w~n", [self(), Tcb, Pkt]),
 	    timer:sleep(1000),
 	    Tcb#tcb{send_type = ack} % challenge ack
     end.
