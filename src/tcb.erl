@@ -151,7 +151,7 @@ handle_call({bind, #{addr := InetAddr, family := inet, port := Port} = SockAddr}
     {reply, ok, Tcb#tcb{lc_port = Port, lc_ip = Addr}};
 
 % TODO: Backlog
-handle_call({listen, _Backlog}, _From, Tcb) ->
+handle_call({listen, _Backlog}, _From, Tcb) when Tcb#tcb.state == new ->
     Reply = case Tcb#tcb.lc_port of
         N when is_integer(N), N > 0, N < 65536 ->
             case tcp_pool:add({local, {Tcb#tcb.lc_ip, Tcb#tcb.lc_port}}, self()) of
@@ -160,7 +160,7 @@ handle_call({listen, _Backlog}, _From, Tcb) ->
             end;
         _ -> {error, badarg}
     end,
-    {reply, Reply, Tcb};
+    {reply, Reply, Tcb#tcb{state = listen}};
 
 handle_call({accept, Timeout}, From, Tcb) ->
     case queue:out_r(Tcb#tcb.open_queue) of
