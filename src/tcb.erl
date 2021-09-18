@@ -124,21 +124,18 @@ handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == [] ->
 	time_wait -> {reply, {error, connect_closing}, Tcb};
 	listen -> {reply, {error, no_connection}, Tcb};
 	close_wait when Tcb#tcb.rbsize == 0 -> {reply, {error, connection_closing}, Tcb};
-	_ ->
-	    if Length == 0 orelse Tcb#tcb.rbsize > 0 ->
-		Size = ?min(Length, Tcb#tcb.rbsize),
-		{Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
-		New_Size = Tcb#tcb.rbsize - Size,
-		Free_Buf = ?max(Tcb#tcb.maxrbsize-New_Size, 0),
-		Rcv_Wnd = ?min(?TCP_MAX_WINDOW, Free_Buf),
+	_ when Tcb#tcb.rbsize > 0 ->
+            Size = ?min(Length, Tcb#tcb.rbsize),
+            {Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
+            New_Size = Tcb#tcb.rbsize - Size,
+            Free_Buf = ?max(Tcb#tcb.maxrbsize-New_Size, 0),
+            Rcv_Wnd = ?min(?TCP_MAX_WINDOW, Free_Buf),
 
-		Tcb1 = Tcb#tcb{rbuf=Rem, rbsize=New_Size, rcv_wnd = Rcv_Wnd},
-		% TODO: if window went from zero to non-zero, send packet
-		gen_server:reply(From, Data),
-		send_packet(Tcb1);
-	    true ->
-	        send_packet(Tcb#tcb{obs = {From, Length}})
-	    end
+            Tcb1 = Tcb#tcb{rbuf=Rem, rbsize=New_Size, rcv_wnd = Rcv_Wnd},
+            % TODO: if window went from zero to non-zero, send packet
+            gen_server:reply(From, {ok, Data}),
+            send_packet(Tcb1);
+        _ -> send_packet(Tcb#tcb{obs = {From, Length}})
     end;
 
 handle_call(close, From, Tcb) ->
@@ -400,12 +397,12 @@ get_data(Buf, Size, Acc) ->
 	{'EXIT', _} ->
 	    {Acc, Buf};
 	Data ->
-	    if size(Data) > Size ->
+	    if Size == 0; size(Data) == Size ->
+		    {<<Acc/binary, Data/binary>>, queue:init(Buf)};
+	       size(Data) > Size ->
 		    <<Partial_Data:Size/binary, Rem/binary>> = Data,
 		    {<<Acc/binary, Partial_Data/binary>>,
 		     queue:snoc((queue:init(Buf)), Rem)};
-	       size(Data) == Size ->
-		    {<<Acc/binary, Data/binary>>, queue:init(Buf)};
 	       true ->
 		    get_data(queue:init(Buf), Size - size(Data), 
 			     <<Acc/binary, Data/binary>>)

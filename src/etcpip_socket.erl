@@ -25,7 +25,7 @@
 -module(etcpip_socket).
 
 -export([start/0, start/2, start_ip/1, open/2, open/3, open/4, listen/1, accept/1, accept/2, recv/2, recv/3, recv/4, send/2,
-	 send/4, close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, map_ip/1, listen/2]).
+	 send/4, close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, getopt/2, map_ip/1, listen/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -70,6 +70,7 @@ string_to_ip(Ip) ->
     lists:foldl(fun (N, Acc) -> {N2, _} = string:to_integer(N), Acc*256+N2 end, 0, T).
 
 setopt(Con, Option, Parameter) -> gen_server:call(Con, {setopt, Option, Parameter}, infinity).
+getopt(Con, Option) -> gen_server:call(Con, {getopt, Option}, infinity).
     
 %%%%%%%%%%%%%%%%%%%%%%% INTERNAL FUNCTIONS %%%%%%%%%%%%%%%%%%
 
