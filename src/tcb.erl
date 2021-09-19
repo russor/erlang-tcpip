@@ -106,16 +106,10 @@ handle_info(timeout, Tcb = #tcb{state = time_wait}) ->
 handle_info({state, _State, _}, Tcb) -> % Erase them if the connection closes??
     send_packet(Tcb).
 
-handle_call({queue, Data}, From, Tcb) ->
+handle_call({queue, Data, _Flags, _Timeout}, From, Tcb) ->
     {Tcb1, Reply} = queue(Tcb, Data),
     gen_server:reply(From, Reply),
     send_packet(Tcb1);
-
-handle_call({recv, Length}, From, Tcb) when is_integer(Length)-> handle_call({recv, Length, [], infinity}, From, Tcb);
-handle_call({recv, Flags}, From, Tcb) when is_list(Flags) -> handle_call({recv, 0, Flags, infinity}, From, Tcb);
-handle_call({recv, Length, Flags}, From, Tcb) when is_list(Flags) -> handle_call({recv, Length, Flags, infinity}, From, Tcb);
-handle_call({recv, Flags, Timeout}, From, Tcb) when is_list(Flags) -> handle_call({recv, 0, Flags, Timeout}, From, Tcb);
-handle_call({recv, Length, Timeout}, From, Tcb) when is_integer(Length) -> handle_call({recv, Length, [], Timeout}, From, Tcb);
 
 handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == [] ->
     case Tcb#tcb.state of
@@ -192,9 +186,14 @@ handle_call({setopt, {otp, meta}, Map}, _From, Tcb) ->
     {reply, ok, NewTcb};
 
 handle_call({setopt, {otp, Key}, Val}, _From, Tcb = #tcb{options = Options}) ->
-    {reply, ok, Tcb#tcb{options = Options#{{otp, Key} => Val}}}.
+    {reply, ok, Tcb#tcb{options = Options#{{otp, Key} => Val}}};
 
-
+handle_call({getopt, {otp, meta}}, _From, Tcb) ->
+    Meta = maps:fold(fun
+        ({otp, Key}, Val, Acc) -> Acc#{Key => Val};
+        (_K, _V, Acc) -> Acc
+    end, #{}, Tcb#tcb.options),
+    {reply, {ok, Meta}, Tcb}.
 
 handle_cast({in, Pkt}, Tcb) ->
     send_packet(in(Tcb#tcb.state, Tcb, Pkt)).
@@ -353,7 +352,7 @@ set_rdata(Tcb, Data) ->
     case Tcb#tcb.obs of
 	{} -> Tcb1;
 	{From, Length} ->
-	    case handle_call({recv, Length}, From, Tcb1) of
+	    case handle_call({recv, Length, [], infinity}, From, Tcb1) of
 	        {noreply, Tcb2} -> Tcb2;
 	        {noreply, Tcb2, _Timeout} -> Tcb2
 	    end
