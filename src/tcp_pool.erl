@@ -24,96 +24,72 @@
 
 -module(tcp_pool).
 
--export([start/1,start_link/1,init/1,get/1,add/2,remove/1, new_ip/1]).
-
+-export([start_link/1,init/1,get/1,add/2,remove/1, new_ip/1]).
+-behavior(gen_server).
+-export([handle_call/3]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%
 
-start(Ip) ->
-    spawn(tcp_pool, init, [Ip]).
+start_link(Ip) -> gen_server:start_link({local, ?MODULE}, ?MODULE, [Ip], []).
 
-start_link(Ip) ->
-    {ok, spawn_link(tcp_pool, init, [Ip])}.
+get(Socket) -> gen_server:call(?MODULE, {get, Socket}, infinity).
 
-get(Socket) ->
-    tcp_pool ! {get, Socket, self()},
-    receive
-	{tcp_pool, ok, Conn} ->
-	    {ok, Conn};
-	{tcp_pool, error, no_connection} ->
-	    {error, no_connection}
-    end.
+add({Type, Socket}, Conn) -> gen_server:call(?MODULE, {add, Type, Socket, Conn}, infinity).
 
-add({Type, Socket}, Conn) ->
-    tcp_pool ! {add, Type, Socket, Conn, self()},
-    receive 
-	{tcp_pool, ok, Lc_Ip, Lc_Port} ->
-	    {ok, Lc_Ip, Lc_Port};
-	{tcp_pool, error, Error} ->
-	    {error, Error}
-    end.
-
-remove(Socket) ->
-    tcp_pool ! {remove, Socket}.
+remove(Socket) -> gen_server:call(?MODULE, {remove, Socket}).
 
 
 %%%%%%%%%%%%%%%%%%%%% Server Loop %%%%%%%%%%%%%%%%%%
 
 init(Ip) ->
-    register(tcp_pool, self()),
-    ets:new(tcp_pool, [set, public, named_table]),
-    loop(Ip).
+    Table = ets:new(tcp_pool, [set, public, named_table]),
+    {ok, {Table, Ip}}.
 
-new_ip(Ip) ->
-    tcp_pool ! {new_ip, Ip}.
+new_ip(Ip) -> gen_server:call(?MODULE, {new_ip, Ip}, infinity).
 
-lookup([]) -> [];
-lookup([Socket | T]) ->
-    case catch (ets:lookup(tcp_pool, Socket)) of
-        [] -> lookup(T);
+lookup(_Table, []) -> [];
+lookup(Table, [Socket | T]) ->
+    case catch (ets:lookup(Table, Socket)) of
+        [] -> lookup(Table, T);
         Other -> Other
     end;
-lookup(Socket) -> lookup([Socket]).
+lookup(Table, Socket) -> lookup(Table, [Socket]).
 
-loop(Ip) ->
-    Ip2 = receive
-        {new_ip, NewIp} -> NewIp;
-	{get, Socket, From} ->
-	    case lookup(Socket) of
-	        [] -> From ! {tcp_pool, error, no_connection};
-	        [{_, Conn}] -> From ! {tcp_pool, ok, Conn}
-	    end,
-	    Ip;
-	{add, remote, R_Socket, Conn, From} ->
-	    {Rt_Ip, Rt_Port} = R_Socket,
-	    Lc_Port = find_free_port(Ip, Rt_Ip, Rt_Port),
-	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
-	    From ! {tcp_pool, ok, Ip, Lc_Port},
-	    Ip;
-	{add, local, {Lc_Addr, Lc_Port}, Conn, From} ->
-	    case ets:insert_new(tcp_pool, {{Lc_Addr, Lc_Port}, Conn}) of
-	        true -> From ! {tcp_pool, ok, Lc_Addr, Lc_Port};
-	        false -> From ! {tcp_pool, {error, eaddrinuse}}
-	    end,
-	    Ip;
-	{add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn, From} ->
-	    ets:insert(tcp_pool, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
-	    From ! {tcp_pool, ok, Ip, Lc_Port},
-	    Ip;
-	{remove, Socket} ->
-            lists:foreach(fun(S) -> ets:delete_object(tcp_pool, S) end,
-                          ets:match_object(tcp_pool, {'_', Socket})),
-            Ip
-    end,
-    loop(Ip2).
+handle_call({new_ip, NewIp}, _From, {Table, _Ip}) -> {reply, ok, {Table, NewIp}};
 
-find_free_port(Lc_Ip, Rt_Ip, Rt_Port) ->
-    find_free_port_1(Lc_Ip, Rt_Ip, Rt_Port, 1000).
+handle_call({get, Socket}, _From, {Table, _} = S) ->
+    case lookup(Table, Socket) of
+	[] -> {reply, {error, no_connection}, S};
+	[{_, Conn}] -> {reply, {ok, Conn}, S}
+    end;
 
-find_free_port_1(Lc_Ip, Rt_Ip, Rt_Port, N) ->
-    case ets:member(tcp_pool, {Lc_Ip, N, Rt_Ip, Rt_Port}) of
+handle_call({add, remote, R_Socket, Conn}, _From, {Table, Ip} = S) ->
+    {Rt_Ip, Rt_Port} = R_Socket,
+    Lc_Port = find_free_port(Table, Ip, Rt_Ip, Rt_Port),
+    ets:insert(Table, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
+    {reply, {ok, Ip, Lc_Port}, S};
+
+handle_call({add, local, {Lc_Addr, Lc_Port}, Conn}, _From, {Table, _} = S) ->
+    case ets:insert_new(Table, {{Lc_Addr, Lc_Port}, Conn}) of
+	true -> {reply, {ok, Lc_Addr, Lc_Port}, S};
+	false -> {reply, {error, eaddrinuse}, S}
+    end;
+
+handle_call({add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}, _From, {Table, _} = S) ->
+    ets:insert(Table, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
+    {reply, {ok, Ip, Lc_Port}, S};
+
+handle_call({remove, Socket}, _From, {Table, _} = S) ->
+    ets:delete(Table, Socket),
+    {reply, ok, S}.
+
+find_free_port(Table, Lc_Ip, Rt_Ip, Rt_Port) ->
+    find_free_port_1(Table, Lc_Ip, Rt_Ip, Rt_Port, 1000).
+
+find_free_port_1(Table, Lc_Ip, Rt_Ip, Rt_Port, N) ->
+    case ets:member(Table, {Lc_Ip, N, Rt_Ip, Rt_Port}) of
 	true ->
-	    find_free_port_1(Lc_Ip, Rt_Ip, Rt_Port, N+1);
+	    find_free_port_1(Table, Lc_Ip, Rt_Ip, Rt_Port, N+1);
 	false ->
 	    N
     end.
