@@ -69,10 +69,15 @@ handle_call({add, remote, R_Socket, Conn}, _From, {Table, Ip} = S) ->
     ets:insert(Table, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
     {reply, {ok, Ip, Lc_Port}, S};
 
-handle_call({add, local, {Lc_Addr, Lc_Port}, Conn}, _From, {Table, _} = S) ->
+handle_call({add, local, {Lc_Addr, 0}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 0, 65535}, Conn}, From, S);
+handle_call({add, local, {Lc_Addr, Lc_Port}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, Lc_Port, 1}, Conn}, From, S);
+handle_call({add, local, {Lc_Addr, 0, Tries}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 1, Tries}, Conn}, From, S);
+handle_call({add, local, {Lc_Addr, Lc_Port, 0}, Conn}, _From, S) -> {reply, {error, eaddrinuse}, S};
+
+handle_call({add, local, {Lc_Addr, Lc_Port, Tries}, Conn}, From, {Table, _} = S) ->
     case ets:insert_new(Table, {{Lc_Addr, Lc_Port}, Conn}) of
 	true -> {reply, {ok, Lc_Addr, Lc_Port}, S};
-	false -> {reply, {error, eaddrinuse}, S}
+	false -> handle_call({add, local, {Lc_Addr, Lc_Port + 1, Tries - 1}, Conn}, From, S)
     end;
 
 handle_call({add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}, _From, {Table, _} = S) ->
