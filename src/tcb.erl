@@ -26,7 +26,7 @@
 
 -export([start/3, start/2, init/2, init/3]).
 -export([handle_info/2, handle_cast/2, handle_call/3]).
--export([set_snd_wnd/2, set_snd_una/2, set_del_ack/2,
+-export([set_snd_wnd/2, set_snd_una/2, 
          set_rqueue/2, set_state/2,
          get_rqueue/1]).
 
@@ -111,14 +111,21 @@ handle_call({queue, Data, _Flags, _Timeout}, From, Tcb) ->
     gen_server:reply(From, Reply),
     send_packet(Tcb1);
 
-handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == [] ->
+handle_call({recv, Length, [peek], Timeout}, From, Tcb) ->
+    handle_call({recv, -Length, [], Timeout}, From, Tcb);
+
+handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == []->
     case Tcb#tcb.state of
 	closing -> {reply, {error, connect_closing}, Tcb};
 	last_ack -> {reply, {error, connect_closing}, Tcb};
 	time_wait -> {reply, {error, connect_closing}, Tcb};
 	listen -> {reply, {error, no_connection}, Tcb};
 	close_wait when Tcb#tcb.rbsize == 0 -> {reply, {error, connection_closing}, Tcb};
-	_ when Tcb#tcb.rbsize > 0 ->
+	_ when Length < 0 andalso Tcb#tcb.rbsize >= -Length ->
+            {Data, _Rem} = get_data(Tcb#tcb.rbuf, -Length, <<>>),
+            gen_server:reply(From, {ok, Data}),
+            send_packet(Tcb);
+	_ when Tcb#tcb.rbsize > 0 andalso Length >= 0 ->
             Size = ?min(Length, Tcb#tcb.rbsize),
             {Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
             New_Size = Tcb#tcb.rbsize - Size,
@@ -132,11 +139,19 @@ handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == [] ->
         _ -> send_packet(Tcb#tcb{obs = {From, Length}})
     end;
 
+handle_call(close, From, #tcb{state = listen} = Tcb) ->
+    % TODO: notify listeners!
+    gen_server:reply(From, ok),
+    {stop, normal, Tcb};
+
+handle_call(close, From, #tcb{state = new} = Tcb) ->
+    gen_server:reply(From, ok),
+    {stop, normal, Tcb};
+
 handle_call(close, From, Tcb) ->
     NewState = case Tcb#tcb.state of
         established -> fin_wait_1;
         close_wait -> last_ack;
-        listen -> closed;
         syn_rcvd -> fin_wait_1
     end,
     Tcb1 = set_state(Tcb#tcb{send_fin = 1, send_type = any, snd_max = seq:add(Tcb#tcb.snd_max, 1)}, NewState),
@@ -149,15 +164,15 @@ handle_call({bind, #{addr := InetAddr, family := inet, port := Port} = SockAddr}
 
 % TODO: Backlog
 handle_call({listen, _Backlog}, _From, Tcb) when Tcb#tcb.state == new ->
-    Reply = case Tcb#tcb.lc_port of
-        N when is_integer(N), N > 0, N < 65536 ->
+    case Tcb#tcb.lc_port of
+        N when is_integer(N), N >= 0, N < 65536 ->
             case tcp_pool:add({local, {Tcb#tcb.lc_ip, Tcb#tcb.lc_port}}, self()) of
-                {ok, _, _} -> ok;
-                Other -> Other
+                {ok, ListenedIp, ListenedPort} ->
+                    {reply, ok, Tcb#tcb{state = listen, lc_ip = ListenedIp, lc_port=ListenedPort}};
+                Other -> {reply, Other, Tcb}
             end;
-        _ -> {error, badarg}
-    end,
-    {reply, Reply, Tcb#tcb{state = listen}};
+        _ -> {reply, {error, badarg}, Tcb}
+    end;
 
 handle_call({accept, Timeout}, From, Tcb) ->
     case queue:out_r(Tcb#tcb.open_queue) of
@@ -174,8 +189,21 @@ handle_call({accept, Timeout}, From, Tcb) ->
 		{reply, {ok, Socket}, Tcb#tcb{open_queue = Q2}}
     end;
 
+handle_call(sockname, _From, Tcb) ->
+    {reply, {ok, #{family => inet, port => Tcb#tcb.lc_port, addr => etcpip_socket:unmap_ip(Tcb#tcb.lc_ip)}}, Tcb};
+handle_call(peername, _From, Tcb) ->
+    {reply, {ok, #{family => inet, port => Tcb#tcb.rt_port, addr => etcpip_socket:unmap_ip(Tcb#tcb.rt_ip)}}, Tcb};
+handle_call(info, _From, Tcb) ->
+    {reply, #{domain => inet, type => stream, protocol => tcp,
+              owner => client, ctype => normal,
+              counters => #{read_pkg => Tcb#tcb.read_pkg, write_pkg => Tcb#tcb.write_pkg}
+             }, Tcb};
+
 % TODO: option validity
 handle_call({setopt, {socket, reuseaddr}, _Val}, _From, Tcb) ->
+    {reply, ok, Tcb};
+
+handle_call({setopt, {tcp, nodelay}, _Val}, _From, Tcb) ->
     {reply, ok, Tcb};
 
 handle_call({setopt, {otp, meta}, Map}, _From, Tcb) ->
@@ -276,9 +304,11 @@ queue(Tcb, _Data) when Tcb#tcb.state == time_wait -> {Tcb, {error, connection_cl
 queue(Tcb, _Data) when Tcb#tcb.state == closed -> {Tcb, {error, connection_closed}};
 
 queue(Tcb, Data) ->
-    Sbuf = queue:cons(Data, Tcb#tcb.sbuf),
-    Tcb1 = Tcb#tcb{sbuf = Sbuf, sbsize = Tcb#tcb.sbsize + size(Data),
-                   snd_max = seq:add(Tcb#tcb.snd_max, size(Data))},
+    Data1 = iolist_to_binary(Data),
+    Sbuf = queue:cons(Data1, Tcb#tcb.sbuf),
+    Tcb1 = Tcb#tcb{sbuf = Sbuf, sbsize = Tcb#tcb.sbsize + size(Data1),
+                   snd_max = seq:add(Tcb#tcb.snd_max, size(Data1)),
+                   write_pkg = Tcb#tcb.write_pkg + 1},
     case get_data_size(Tcb1) of
 	0 -> {Tcb1, ok};
 	_ -> {Tcb1#tcb{send_type = any}, ok}
@@ -348,7 +378,8 @@ set_rdata(Tcb, Data) ->
     Rcv_Wnd = ?min(?TCP_MAX_WINDOW, Free_Buf),
     
     Tcb1 = Tcb#tcb{rbuf = New_Data, rbsize = New_Size,
-		      rcv_nxt = Rcv_Nxt, rcv_wnd = Rcv_Wnd, obs = {}},
+                   rcv_nxt = Rcv_Nxt, rcv_wnd = Rcv_Wnd, obs = {},
+                   read_pkg = Tcb#tcb.read_pkg + 1},
     case Tcb#tcb.obs of
 	{} -> Tcb1;
 	{From, Length} ->

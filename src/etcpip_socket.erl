@@ -25,7 +25,7 @@
 -module(etcpip_socket).
 
 -export([start/0, start/2, start_ip/1, open/2, open/3, open/4, listen/1, accept/1, accept/2, recv/4, send/4,
-	 close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, getopt/2, map_ip/1, listen/2]).
+	 close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, getopt/2, map_ip/1, unmap_ip/1, listen/2, sockname/1, peername/1, info/1]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -66,6 +66,10 @@ string_to_ip(Ip) ->
 
 setopt(Con, Option, Parameter) -> gen_server:call(Con, {setopt, Option, Parameter}, infinity).
 getopt(Con, Option) -> gen_server:call(Con, {getopt, Option}, infinity).
+
+sockname(Conn) -> gen_server:call(Conn, sockname, infinity).
+peername(Conn) -> gen_server:call(Conn, peername, infinity).
+info(Conn) -> gen_server:call(Conn, info, infinity).
     
 %%%%%%%%%%%%%%%%%%%%%%% INTERNAL FUNCTIONS %%%%%%%%%%%%%%%%%%
 
@@ -95,7 +99,7 @@ init(Full, _PhyModule, L2Module) ->
     ip:start(Ip, NetMask, GateWay, L2Module),
     icmp:start(),
     udp:start_link(),
-    tcp_pool:start(Ip),
+    tcp_pool:start_link(Ip),
     tcp:start().
 
 new_ip(Ip, NetMask, GateWay) ->
@@ -104,8 +108,14 @@ new_ip(Ip, NetMask, GateWay) ->
     tcp_pool:new_ip(Ip).
 
 %% Stack is IPv4 only...
+map_ip(any) -> 0;
 map_ip({A, B, C, D}) ->
     <<R:32>> = <<A, B, C, D>>,
     R.
 
 map_mac(<<E:48>>) -> E.
+
+unmap_ip(0) -> any;
+unmap_ip(IP) ->
+    <<A, B, C, D>> = <<IP:32>>,
+    {A, B, C, D}.

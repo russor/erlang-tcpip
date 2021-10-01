@@ -91,5 +91,7 @@
 	                                %   listen sockets
 	  options   = #{},
 	  obs = queue:new(),
-	  send_type = none
+	  send_type = none,
+	  read_pkg = 0,
+	  write_pkg = 0
 }).

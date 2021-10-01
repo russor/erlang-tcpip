@@ -28,7 +28,7 @@
 -import(packet_check,[check_packet/4, compute_checksum/5]).
 -export([start_link/0, init/1, recv/3, send/5, open/1, open/3]).
 -export([handle_call/3, handle_cast/2, handle_info/2]).
-
+-behavior(gen_server).
 -include("ip.hrl").
 %%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
