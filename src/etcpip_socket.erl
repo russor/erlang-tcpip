@@ -25,7 +25,7 @@
 -module(etcpip_socket).
 
 -export([start/0, start/2, start_ip/1, open/2, open/3, open/4, listen/1, accept/1, accept/2, recv/4, send/4,
-	 close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, getopt/2, map_ip/1, unmap_ip/1, listen/2, sockname/1, peername/1, info/1]).
+	 close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, getopt/2, map_ip/1, unmap_ip/1, listen/2, sockname/1, peername/1, info/1, cancel/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -70,6 +70,7 @@ getopt(Con, Option) -> gen_server:call(Con, {getopt, Option}, infinity).
 sockname(Conn) -> gen_server:call(Conn, sockname, infinity).
 peername(Conn) -> gen_server:call(Conn, peername, infinity).
 info(Conn) -> gen_server:call(Conn, info, infinity).
+cancel(Conn, Info) -> gen_server:call(Conn, {cancel, Info}, infinity).
     
 %%%%%%%%%%%%%%%%%%%%%%% INTERNAL FUNCTIONS %%%%%%%%%%%%%%%%%%
 

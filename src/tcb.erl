@@ -114,7 +114,8 @@ handle_call({queue, Data, _Flags, _Timeout}, From, Tcb) ->
 handle_call({recv, Length, [peek], Timeout}, From, Tcb) ->
     handle_call({recv, -Length, [], Timeout}, From, Tcb);
 
-handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == []->
+handle_call({recv, Length, Flags, Timeout}, From, Tcb)
+    when Flags == [], Tcb#tcb.obs == {} ->
     case Tcb#tcb.state of
 	closing -> {reply, {error, connect_closing}, Tcb};
 	last_ack -> {reply, {error, connect_closing}, Tcb};
@@ -136,8 +137,21 @@ handle_call({recv, Length, Flags, _Timeout}, From, Tcb) when Flags == []->
             % TODO: if window went from zero to non-zero, send packet
             gen_server:reply(From, {ok, Data}),
             send_packet(Tcb1);
-        _ -> send_packet(Tcb#tcb{obs = {From, Length}})
+        _ when Timeout == nowait ->
+            Handle = make_ref(),
+            gen_server:reply(From, {select, {select_info, recv, Handle}}),
+            {To, _Tag} = From,
+            send_packet(Tcb#tcb{obs = {To, Length, Handle}});
+        _ when Timeout == infinity ->
+            send_packet(Tcb#tcb{obs = {From, Length}});
+        _ when is_integer(Timeout) ->
+            send_packet(Tcb#tcb{obs = {From, Length}})
     end;
+
+handle_call({cancel, {select_info, recv, Ref}}, _From, #tcb{obs = {_, _, Ref}} = Tcb) ->
+    {reply, ok, Tcb#tcb{obs = {}}};
+handle_call({cancel, SelectInfo}, _From, Tcb) ->
+    {reply, {error, {invalid, SelectInfo}}, Tcb};
 
 handle_call(close, From, #tcb{state = listen} = Tcb) ->
     % TODO: notify listeners!
@@ -383,10 +397,17 @@ set_rdata(Tcb, Data) ->
     case Tcb#tcb.obs of
 	{} -> Tcb1;
 	{From, Length} ->
-	    case handle_call({recv, Length, [], infinity}, From, Tcb1) of
+	    case handle_call({recv, Length, [], infinity}, From, Tcb1#tcb{obs = {}}) of
 	        {noreply, Tcb2} -> Tcb2;
 	        {noreply, Tcb2, _Timeout} -> Tcb2
-	    end
+	    end;
+	{To, Length, SelectHandle} when Length < 0 andalso New_Size >= -Length ->
+	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
+	    Tcb1#tcb{obs = {}};
+	{To, Length, SelectHandle} when Length >= 0 andalso New_Size >= Length ->
+	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
+	    Tcb1#tcb{obs = {}};
+	{_To, _Length, _SelectHandle} -> Tcb1
     end.
 
 set_open_queue(Tcb, Socket) ->
