@@ -123,10 +123,15 @@ handle_call({recv, Length, Flags, Timeout}, From, Tcb)
 	listen -> {reply, {error, no_connection}, Tcb};
 	close_wait when Tcb#tcb.rbsize == 0 -> {reply, {error, connection_closing}, Tcb};
 	_ when Length < 0 andalso Tcb#tcb.rbsize >= -Length ->
+	    %io:format("peek data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             {Data, _Rem} = get_data(Tcb#tcb.rbuf, -Length, <<>>),
             gen_server:reply(From, {ok, Data}),
             send_packet(Tcb);
-	_ when Tcb#tcb.rbsize > 0 andalso Length >= 0 ->
+	_ when (Tcb#tcb.rbsize > 0 andalso Length == 0) orelse
+	       (Tcb#tcb.rbsize >= Length andalso Length > 0) orelse
+	       Tcb#tcb.state == close_wait orelse
+	       Tcb#tcb.state == time_wait ->
+	    %io:format("got data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             Size = ?min(Length, Tcb#tcb.rbsize),
             {Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
             New_Size = Tcb#tcb.rbsize - Size,
@@ -138,6 +143,7 @@ handle_call({recv, Length, Flags, Timeout}, From, Tcb)
             gen_server:reply(From, {ok, Data}),
             send_packet(Tcb1);
         _ when Timeout == nowait ->
+	    %io:format("selecting data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             Handle = make_ref(),
             gen_server:reply(From, {select, {select_info, recv, Handle}}),
             {To, _Tag} = From,
@@ -149,6 +155,7 @@ handle_call({recv, Length, Flags, Timeout}, From, Tcb)
     end;
 
 handle_call({cancel, {select_info, recv, Ref}}, _From, #tcb{obs = {_, _, Ref}} = Tcb) ->
+    %io:format("cancel select~n", []),
     {reply, ok, Tcb#tcb{obs = {}}};
 handle_call({cancel, SelectInfo}, _From, Tcb) ->
     {reply, {error, {invalid, SelectInfo}}, Tcb};
@@ -392,7 +399,7 @@ set_rdata(Tcb, Data) ->
     Rcv_Wnd = ?min(?TCP_MAX_WINDOW, Free_Buf),
     
     Tcb1 = Tcb#tcb{rbuf = New_Data, rbsize = New_Size,
-                   rcv_nxt = Rcv_Nxt, rcv_wnd = Rcv_Wnd, obs = {},
+                   rcv_nxt = Rcv_Nxt, rcv_wnd = Rcv_Wnd,
                    read_pkg = Tcb#tcb.read_pkg + 1},
     case Tcb#tcb.obs of
 	{} -> Tcb1;
@@ -402,12 +409,16 @@ set_rdata(Tcb, Data) ->
 	        {noreply, Tcb2, _Timeout} -> Tcb2
 	    end;
 	{To, Length, SelectHandle} when Length < 0 andalso New_Size >= -Length ->
+	    %io:format("select peek ~B ~B~n", [Length, New_Size]),
 	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
 	    Tcb1#tcb{obs = {}};
 	{To, Length, SelectHandle} when Length >= 0 andalso New_Size >= Length ->
+	    %io:format("select ~B ~B~n", [Length, New_Size]),
 	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
 	    Tcb1#tcb{obs = {}};
-	{_To, _Length, _SelectHandle} -> Tcb1
+	{_To, Length, _SelectHandle} ->
+	    %io:format("still waiting length ~B, new size ~B~n", [Length, New_Size]),
+	    Tcb1
     end.
 
 set_open_queue(Tcb, Socket) ->
@@ -591,7 +602,7 @@ check_ack(Tcb, Pkt) ->
 process_packet(Tcb, Pkt, State) ->
     case pkt_data(Tcb, Pkt) of
         % sequence acceptable
-	{ok, Rcv_Nxt, Data} -> process_ack(Tcb, Pkt, State, Rcv_Nxt, Data);
+	{ok, Data} -> process_ack(Tcb, Pkt, State, Data);
 	{error, _} ->
 	    io:format("seq challenge ack~w~w~w~n", [self(), Tcb, Pkt]),
 	    timer:sleep(1000),
@@ -600,16 +611,16 @@ process_packet(Tcb, Pkt, State) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%% HELPER FUNCTIONS %%%%%%%%%%%%%%%%%%%%%
 
-process_ack(Tcb, Pkt, State, Rcv_Nxt, Data) ->
+process_ack(Tcb, Pkt, State, Data) ->
     if Pkt#pkt.is_syn == 1 -> Tcb#tcb{send_type = ack};
     true -> case check_ack(Tcb, Pkt) of
 	{ok, newack, Tcb1} ->
 	    Tcb2 = process_window(Tcb1, Pkt),
-	    Tcb3 = process_data(Tcb2, Pkt, State, Rcv_Nxt, Data),
+	    Tcb3 = process_data(Tcb2, Pkt, State, Data),
 	    newack_action(State, Tcb3, Pkt);
 	{ok, oldack} ->
 	    Tcb1 = process_window(Tcb, Pkt),
-	    process_data(Tcb1, Pkt, State, Rcv_Nxt, Data);
+	    process_data(Tcb1, Pkt, State, Data);
 	{ok, noack} -> Tcb; % Packet should have an ack, so drop
 	{error, badack} ->
 	    io:format("badack challenge ack~n", []),
@@ -620,37 +631,37 @@ process_ack(Tcb, Pkt, State, Rcv_Nxt, Data) ->
 process_window(Tcb, Pkt) ->
     set_snd_wnd(Tcb, {Pkt#pkt.window, Pkt#pkt.seq, Pkt#pkt.ack}).
 
-process_data(Tcb, Pkt, State, Rcv_Nxt, <<>>) ->
-    process_fin(Tcb, Pkt#pkt.is_fin, Rcv_Nxt, State, no_ack, 0);
-process_data(Tcb, Pkt, State, Rcv_Nxt, Data) ->
-    if
-	Rcv_Nxt < Pkt#pkt.seq ->  % Out of order data
-	    Out_Order_Data = {Pkt#pkt.seq, Pkt#pkt.is_fin, Data},
-	    tcb:out_order_action(State, Tcb, Out_Order_Data);
-	true ->
-	    case data_action(State, Tcb, Data) of
-		{ok, Tcb1} ->
-		    NRcv_Nxt = seq:add(Rcv_Nxt, size(Data)),
-		    check_out_order(Tcb1, NRcv_Nxt, State, size(Data), Pkt);
-		_ -> Tcb
-	    end
+process_data(Tcb, Pkt, State, <<>>) ->
+    process_fin(Tcb, Pkt#pkt.is_fin, State, no_ack, 0);
+process_data(Tcb, Pkt, State, Data) ->
+    case seq:lt(Tcb#tcb.rcv_nxt, Pkt#pkt.seq) of
+        true ->  % Out of order data
+            Out_Order_Data = {Pkt#pkt.seq, Pkt#pkt.is_fin, Data},
+            tcb:out_order_action(State, Tcb, Out_Order_Data);
+        false ->
+            case data_action(State, Tcb, Data) of
+                ok ->
+                    Tcb1 = set_rdata(Tcb, Data),
+                    check_out_order(Tcb1, State, size(Data), Pkt);
+                _ -> Tcb
+            end
     end.
 
-check_out_order(Tcb, Rcv_Nxt, State, Data_Size, Pkt) ->
+check_out_order(Tcb, State, Data_Size, Pkt) ->
     case out_order:get_out_order(Tcb#tcb.out_order, Tcb#tcb.rcv_nxt) of
 	{_, Is_Fin, Data} ->
 	    State = Tcb#tcb.state,
 	    data_action(State, Tcb, Data),
-	    process_fin(Tcb, Is_Fin, Rcv_Nxt, State,
+	    process_fin(Tcb, Is_Fin, State,
 			ack, size(Data));
 	_ ->
-	    process_fin(Tcb, Pkt#pkt.is_fin, Rcv_Nxt, State,
+	    process_fin(Tcb, Pkt#pkt.is_fin, State,
 			del_ack, Data_Size)
     end.
 
-process_fin(Tcb, Is_Fin, Rcv_Nxt, State, Ack, Data_Size) ->
+process_fin(Tcb, Is_Fin, State, Ack, Data_Size) ->
   case Is_Fin of
-      1 -> fin_action(State, Tcb, Rcv_Nxt);
+      1 -> fin_action(State, Tcb);
       0 ->
 	  case Ack of
 	      ack -> Tcb#tcb{send_type = any};
@@ -664,13 +675,13 @@ pkt_data(Tcb, Pkt) ->
     {Rcv_Nxt, Rcv_Wnd} = {Tcb#tcb.rcv_nxt, Tcb#tcb.rcv_wnd},
     if   % 99% of packets should fall in the first condition
 	(Pkt#pkt.seq == Rcv_Nxt) and (Seg_Len =< Rcv_Wnd) ->
-	    {ok, Rcv_Nxt, Pkt#pkt.data};
+	    {ok, Pkt#pkt.data};
 	true ->
 	    case {Seg_Len, Rcv_Wnd} of
 		{_, 0} -> % Check if the sequence number is the one
 		    case Pkt#pkt.seq == Rcv_Nxt of
 			true ->
-			    {ok, Rcv_Nxt, <<>>};
+			    {ok, <<>>};
 			false ->
 			    {error, badseq}
 		    end;
@@ -678,7 +689,7 @@ pkt_data(Tcb, Pkt) ->
 		    case seq:le(Rcv_Nxt, Pkt#pkt.seq) andalso
 			seq:lt(Pkt#pkt.seq, seq:add(Rcv_Nxt, Rcv_Wnd)) of
 			true ->
-			    {ok, Rcv_Nxt, <<>>};
+			    {ok, <<>>};
 			false ->
 			    {error, badseq}
 		    end;
@@ -708,7 +719,7 @@ trim_packet(Pkt, Rcv_Nxt, Rcv_Wnd, Seg_Len) ->
 			  0
 		  end,
 	    <<_:Off/binary,Data:Size/binary,_/binary>> = Pkt#pkt.data,
-	    {ok, Rcv_Nxt, Data}
+	    {ok, Data}
     end.
 
 newack_action(closing, Tcb, _) ->
@@ -730,10 +741,10 @@ newack_action(last_ack, Tcb, _) ->
 newack_action(syn_rcvd, Tcb, _) -> set_state(Tcb, established);
 newack_action(_, Tcb, _) -> Tcb.
 
-data_action(established, Tcb, Data) -> {ok, set_rdata(Tcb, Data)};
-data_action(fin_wait_1, Tcb, Data) -> {ok, set_rdata(Tcb, Data)};
-data_action(fin_wait_2, Tcb, Data) -> {ok, set_rdata(Tcb, Data)};
-data_action(syn_rcvd, Tcb, Data) -> {ok, set_rdata(Tcb, Data)};
+data_action(established, Tcb, Data) -> ok;
+data_action(fin_wait_1, Tcb, Data) -> ok;
+data_action(fin_wait_2, Tcb, Data) -> ok;
+data_action(syn_rcvd, Tcb, Data) -> ok;
 data_action(_, _, _) -> none.
 
 %out_order_action(established, Tcb, Data) ->
@@ -750,19 +761,19 @@ data_action(_, _, _) -> none.
 %    send_packet(Tcb, ack); % For fast retransmit
 %out_order_action(_, Tcb, _) -> Tcb.
 
-fin_action(established, Tcb, Rcv_Nxt) ->
-    set_state(Tcb#tcb{rcv_nxt = seq:add(Rcv_Nxt, 1), send_type = any}, close_wait);
-fin_action(syn_rcvd, Tcb, Rcv_Nxt) ->
-    set_state(Tcb#tcb{rcv_nxt = seq:add(Rcv_Nxt, 1), send_type = any}, close_wait);
-fin_action(fin_wait_1, Tcb, Rcv_Nxt) ->
+fin_action(established, Tcb) ->
+    set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, close_wait);
+fin_action(syn_rcvd, Tcb) ->
+    set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, close_wait);
+fin_action(fin_wait_1, Tcb) ->
     if Tcb#tcb.send_fin == 2 andalso Tcb#tcb.snd_una == Tcb#tcb.snd_max ->
-        set_state(Tcb#tcb{rcv_nxt = seq:add(Rcv_Nxt, 1), send_type = any}, time_wait);
+        set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, time_wait);
     true ->
-        set_state(Tcb#tcb{rcv_nxt = seq:add(Rcv_Nxt, 1), send_type = any}, closing)
+        set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, closing)
     end;
-fin_action(fin_wait_2, Tcb, Rcv_Nxt) ->
-    set_state(Tcb#tcb{rcv_nxt = seq:add(Rcv_Nxt, 1), send_type = any}, time_wait);
-fin_action(_, Tcb, _) -> Tcb#tcb{send_type = ack}.
+fin_action(fin_wait_2, Tcb) ->
+    set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, time_wait);
+fin_action(_, Tcb) -> Tcb#tcb{send_type = ack}.
 
 %%%%%%%%%%%%%%%%%%% PACKET BUILDING %%%%%%%%%%%%%%%%%%%%%%%%%
 
