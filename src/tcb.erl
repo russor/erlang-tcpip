@@ -114,19 +114,19 @@ handle_call({queue, Data, _Flags, _Timeout}, From, Tcb) ->
 handle_call({recv, Length, [peek], Timeout}, From, Tcb) ->
     handle_call({recv, -Length, [], Timeout}, From, Tcb);
 
-handle_call({recv, Length, Flags, Timeout}, From, Tcb)
-    when Flags == [], Tcb#tcb.obs == {} ->
+handle_call({recv, Length, Flags, Timeout}, From = {To, _Tag}, Tcb)
+    when Flags == [], (Tcb#tcb.obs == {} orelse element(1, Tcb#tcb.obs) == To) ->
     case Tcb#tcb.state of
-	closing -> {reply, {error, connect_closing}, Tcb};
-	last_ack -> {reply, {error, connect_closing}, Tcb};
-	time_wait -> {reply, {error, connect_closing}, Tcb};
+	closing -> {reply, {error, closed}, Tcb};
+	last_ack -> {reply, {error, closed}, Tcb};
+	time_wait when Tcb#tcb.rbsize == 0 -> {reply, {error, closed}, Tcb};
 	listen -> {reply, {error, no_connection}, Tcb};
-	close_wait when Tcb#tcb.rbsize == 0 -> {reply, {error, connection_closing}, Tcb};
+	close_wait when Tcb#tcb.rbsize == 0 -> {reply, {error, closed}, Tcb};
 	_ when Length < 0 andalso Tcb#tcb.rbsize >= -Length ->
 	    %io:format("peek data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             {Data, _Rem} = get_data(Tcb#tcb.rbuf, -Length, <<>>),
             gen_server:reply(From, {ok, Data}),
-            send_packet(Tcb);
+            send_packet(Tcb#tcb{obs = {}});
 	_ when (Tcb#tcb.rbsize > 0 andalso Length == 0) orelse
 	       (Tcb#tcb.rbsize >= Length andalso Length > 0) orelse
 	       Tcb#tcb.state == close_wait orelse
@@ -134,19 +134,18 @@ handle_call({recv, Length, Flags, Timeout}, From, Tcb)
 	    %io:format("got data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             Size = ?min(Length, Tcb#tcb.rbsize),
             {Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
+            gen_server:reply(From, {ok, Data}),
+
+
             New_Size = Tcb#tcb.rbsize - Size,
             Free_Buf = ?max(Tcb#tcb.maxrbsize-New_Size, 0),
             Rcv_Wnd = ?min(?TCP_MAX_WINDOW, Free_Buf),
 
-            Tcb1 = Tcb#tcb{rbuf=Rem, rbsize=New_Size, rcv_wnd = Rcv_Wnd},
-            % TODO: if window went from zero to non-zero, send packet
-            gen_server:reply(From, {ok, Data}),
-            send_packet(Tcb1);
+            send_packet(Tcb#tcb{rbuf=Rem, rbsize=New_Size, rcv_wnd = Rcv_Wnd, obs = {}});
         _ when Timeout == nowait ->
 	    %io:format("selecting data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             Handle = make_ref(),
             gen_server:reply(From, {select, {select_info, recv, Handle}}),
-            {To, _Tag} = From,
             send_packet(Tcb#tcb{obs = {To, Length, Handle}});
         _ when Timeout == infinity ->
             send_packet(Tcb#tcb{obs = {From, Length}});
@@ -408,14 +407,19 @@ set_rdata(Tcb, Data) ->
 	        {noreply, Tcb2} -> Tcb2;
 	        {noreply, Tcb2, _Timeout} -> Tcb2
 	    end;
+	{_, notified, _} -> Tcb1;
 	{To, Length, SelectHandle} when Length < 0 andalso New_Size >= -Length ->
 	    %io:format("select peek ~B ~B~n", [Length, New_Size]),
 	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
-	    Tcb1#tcb{obs = {}};
+	    Tcb1#tcb{obs = {To, notified, SelectHandle}};
 	{To, Length, SelectHandle} when Length >= 0 andalso New_Size >= Length ->
 	    %io:format("select ~B ~B~n", [Length, New_Size]),
 	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
-	    Tcb1#tcb{obs = {}};
+	    Tcb1#tcb{obs = {To, notified, SelectHandle}};
+	{To, Length, SelectHandle} when Tcb1#tcb.state == close_wait; Tcb1#tcb.state == time_wait ->
+	    %io:format("select closing ~p~n", [Tcb1#tcb.obs]),
+	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
+	    Tcb1#tcb{obs = {To, notified, SelectHandle}};
 	{_To, Length, _SelectHandle} ->
 	    %io:format("still waiting length ~B, new size ~B~n", [Length, New_Size]),
 	    Tcb1
@@ -762,9 +766,9 @@ data_action(_, _, _) -> none.
 %out_order_action(_, Tcb, _) -> Tcb.
 
 fin_action(established, Tcb) ->
-    set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, close_wait);
+    set_rdata(set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, close_wait), <<>>);
 fin_action(syn_rcvd, Tcb) ->
-    set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, close_wait);
+    set_rdata(set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, close_wait), <<>>);
 fin_action(fin_wait_1, Tcb) ->
     if Tcb#tcb.send_fin == 2 andalso Tcb#tcb.snd_una == Tcb#tcb.snd_max ->
         set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, time_wait);
