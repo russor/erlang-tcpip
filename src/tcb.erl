@@ -641,7 +641,9 @@ process_data(Tcb, Pkt, State, Data) ->
     case seq:lt(Tcb#tcb.rcv_nxt, Pkt#pkt.seq) of
         true ->  % Out of order data
             Out_Order_Data = {Pkt#pkt.seq, Pkt#pkt.is_fin, Data},
-            tcb:out_order_action(State, Tcb, Out_Order_Data);
+            io:format("dropping out of order segment ~B (expect ~B)~n", [Pkt#pkt.seq, Tcb#tcb.rcv_nxt]),
+            Tcb;
+            %tcb:out_order_action(State, Tcb, Out_Order_Data);
         false ->
             case data_action(State, Tcb, Data) of
                 ok ->
