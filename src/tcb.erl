@@ -34,22 +34,19 @@
 -include("tcp_packet.hrl").
 -include("ip.hrl").
 
--define(min(X,Y), case X < Y of true -> X; false -> Y end).
--define(max(X,Y), case X > Y of true -> X; false -> Y end).
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-start(listen, Port) -> proc_lib:spawn_link(tcb, init, [listen, Port]);
+start(listen, Port) -> proc_lib:spawn_link(?MODULE, init, [listen, Port]);
 
-start(new, Options) -> proc_lib:spawn_link(tcb, init, [new, Options]).
+start(new, Options) -> proc_lib:spawn_link(?MODULE, init, [new, Options]).
 
 start(new, Rt_Ip, Rt_Port) ->
-    proc_lib:spawn_link(tcb, init, [new, Rt_Ip, Rt_Port]).
+    proc_lib:spawn_link(?MODULE, init, [new, Rt_Ip, Rt_Port]).
 
 clone(Tcb, Socket, Irs, Mss) ->
     Rcv_Next = seq:add(Irs, 1),
     {Lc_ip, _Lc_port, Rt_ip, Rt_port} = Socket,
-    Iss = crypto:rand_uniform(0, 4294967296),
+    <<Iss:32>> = crypto:strong_rand_bytes(4),
     N_Tcb=Tcb#tcb{syn_queue=[],
 		  open_queue=queue:new(),
 		  rt_ip = Rt_ip, rt_port = Rt_port,
@@ -111,7 +108,7 @@ handle_call({queue, Data, _Flags, _Timeout}, From, Tcb) ->
     gen_server:reply(From, Reply),
     send_packet(Tcb1);
 
-handle_call({recv, Length, [peek], Timeout}, From, Tcb) ->
+handle_call({recv, Length, [peek], Timeout}, From, Tcb) when Length /= 0 ->
     handle_call({recv, -Length, [], Timeout}, From, Tcb);
 
 handle_call({recv, Length, Flags, Timeout}, From = {To, _Tag}, Tcb)
@@ -132,14 +129,14 @@ handle_call({recv, Length, Flags, Timeout}, From = {To, _Tag}, Tcb)
 	       Tcb#tcb.state == close_wait orelse
 	       Tcb#tcb.state == time_wait ->
 	    %io:format("got data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
-            Size = ?min(Length, Tcb#tcb.rbsize),
+            Size = min(Length, Tcb#tcb.rbsize),
             {Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
             gen_server:reply(From, {ok, Data}),
 
 
             New_Size = Tcb#tcb.rbsize - Size,
-            Free_Buf = ?max(Tcb#tcb.maxrbsize-New_Size, 0),
-            Rcv_Wnd = ?min(?TCP_MAX_WINDOW, Free_Buf),
+            Free_Buf = max(Tcb#tcb.maxrbsize-New_Size, 0),
+            Rcv_Wnd = min(?TCP_MAX_WINDOW, Free_Buf),
 
             send_packet(Tcb#tcb{rbuf=Rem, rbsize=New_Size, rcv_wnd = Rcv_Wnd, obs = {}});
         _ when Timeout == nowait ->
@@ -178,7 +175,7 @@ handle_call(close, From, Tcb) ->
     gen_server:reply(From, ok),
     send_packet(Tcb1);
 
-handle_call({bind, #{addr := InetAddr, family := inet, port := Port} = SockAddr}, _From, Tcb) ->
+handle_call({bind, #{addr := InetAddr, family := inet, port := Port}}, _From, Tcb) ->
     Addr = etcpip_socket:map_ip(InetAddr),
     {reply, ok, Tcb#tcb{lc_port = Port, lc_ip = Addr}};
 
@@ -305,7 +302,7 @@ get_rqueue(Tcb) ->
 	{_, Packet} ->
 	    if Packet#pkt.data_size > Tcb#tcb.smss -> {Tcb, Packet};% PMTU. Do not increase.
 	    true ->
-		Rto = round(?min(?MAX_RTO, Tcb#tcb.rto * 2)),
+		Rto = round(min(?MAX_RTO, Tcb#tcb.rto * 2)),
 		Rtcount = Tcb#tcb.rtcount + 1,
 		Timer = erlang:send_after(Rto, self(), {event, rto}),
 		{Tcb#tcb{rto = Rto, rtcount = Rtcount, rtimer = Timer,
@@ -394,8 +391,8 @@ set_rdata(Tcb, Data) ->
     New_Size = Tcb#tcb.rbsize + size(Data),
     
     Rcv_Nxt = seq:add(Tcb#tcb.rcv_nxt, size(Data)),
-    Free_Buf = ?max(Tcb#tcb.maxrbsize-New_Size, 0),
-    Rcv_Wnd = ?min(?TCP_MAX_WINDOW, Free_Buf),
+    Free_Buf = max(Tcb#tcb.maxrbsize-New_Size, 0),
+    Rcv_Wnd = min(?TCP_MAX_WINDOW, Free_Buf),
     
     Tcb1 = Tcb#tcb{rbuf = New_Data, rbsize = New_Size,
                    rcv_nxt = Rcv_Nxt, rcv_wnd = Rcv_Wnd,
@@ -416,11 +413,11 @@ set_rdata(Tcb, Data) ->
 	    %io:format("select ~B ~B~n", [Length, New_Size]),
 	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
 	    Tcb1#tcb{obs = {To, notified, SelectHandle}};
-	{To, Length, SelectHandle} when Tcb1#tcb.state == close_wait; Tcb1#tcb.state == time_wait ->
+	{To, _Length, SelectHandle} when Tcb1#tcb.state == close_wait; Tcb1#tcb.state == time_wait ->
 	    %io:format("select closing ~p~n", [Tcb1#tcb.obs]),
 	    To ! {'$socket', {etcpip, self()}, select, SelectHandle},
 	    Tcb1#tcb{obs = {To, notified, SelectHandle}};
-	{_To, Length, _SelectHandle} ->
+	{_To, _Length, _SelectHandle} ->
 	    %io:format("still waiting length ~B, new size ~B~n", [Length, New_Size]),
 	    Tcb1
     end.
@@ -448,7 +445,7 @@ set_open_queue(Tcb, Socket) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init_tcb(Rt_Ip, Rt_Port, State) ->
-    Iss = crypto:rand_uniform(0, 4294967296),
+    <<Iss:32>> = crypto:strong_rand_bytes(4),
     #tcb{
 	  rt_port = Rt_Port,
 	  rt_ip   = Rt_Ip,
@@ -476,7 +473,7 @@ get_data(Buf, Size, Acc) ->
     end.
 
 get_available_window(Tcb) ->
-    ?min(Tcb#tcb.snd_wnd, round(Tcb#tcb.cwnd)) -
+    min(Tcb#tcb.snd_wnd, round(Tcb#tcb.cwnd)) -
 	seq:sub(Tcb#tcb.snd_nxt, Tcb#tcb.snd_una).
 
 get_data_size(Tcb) ->
@@ -485,7 +482,7 @@ get_data_size(Tcb) ->
         Tcb#tcb.send_fin > 0 andalso Tcb#tcb.snd_nxt /= Tcb#tcb.snd_max -> 1 + Tcb#tcb.sbsize;
         true -> Tcb#tcb.sbsize
     end,
-    ?max(0, ?min(get_available_window(Tcb), ?min(Tcb#tcb.smss, Queued))).
+    max(0, min(get_available_window(Tcb), min(Tcb#tcb.smss, Queued))).
 
 set_rtimer(Tcb) ->
     case queue:is_empty(Tcb#tcb.rqueue) of
@@ -621,7 +618,7 @@ process_ack(Tcb, Pkt, State, Data) ->
 	{ok, newack, Tcb1} ->
 	    Tcb2 = process_window(Tcb1, Pkt),
 	    Tcb3 = process_data(Tcb2, Pkt, State, Data),
-	    newack_action(State, Tcb3, Pkt);
+	    newack_action(State, Tcb3);
 	{ok, oldack} ->
 	    Tcb1 = process_window(Tcb, Pkt),
 	    process_data(Tcb1, Pkt, State, Data);
@@ -640,12 +637,12 @@ process_data(Tcb, Pkt, State, <<>>) ->
 process_data(Tcb, Pkt, State, Data) ->
     case seq:lt(Tcb#tcb.rcv_nxt, Pkt#pkt.seq) of
         true ->  % Out of order data
-            Out_Order_Data = {Pkt#pkt.seq, Pkt#pkt.is_fin, Data},
+            _Out_Order_Data = {Pkt#pkt.seq, Pkt#pkt.is_fin, Data},
             io:format("dropping out of order segment ~B (expect ~B)~n", [Pkt#pkt.seq, Tcb#tcb.rcv_nxt]),
             Tcb;
             %tcb:out_order_action(State, Tcb, Out_Order_Data);
         false ->
-            case data_action(State, Tcb, Data) of
+            case data_action(State) of
                 ok ->
                     Tcb1 = set_rdata(Tcb, Data),
                     check_out_order(Tcb1, State, size(Data), Pkt);
@@ -657,7 +654,6 @@ check_out_order(Tcb, State, Data_Size, Pkt) ->
     case out_order:get_out_order(Tcb#tcb.out_order, Tcb#tcb.rcv_nxt) of
 	{_, Is_Fin, Data} ->
 	    State = Tcb#tcb.state,
-	    data_action(State, Tcb, Data),
 	    process_fin(Tcb, Is_Fin, State,
 			ack, size(Data));
 	_ ->
@@ -728,30 +724,30 @@ trim_packet(Pkt, Rcv_Nxt, Rcv_Wnd, Seg_Len) ->
 	    {ok, Data}
     end.
 
-newack_action(closing, Tcb, _) ->
+newack_action(closing, Tcb) ->
     if Tcb#tcb.send_fin == 2 andalso Tcb#tcb.snd_una == Tcb#tcb.snd_max ->
 	set_state(Tcb, time_wait);
     true -> Tcb
     end;
-newack_action(fin_wait_1, Tcb, _) ->
+newack_action(fin_wait_1, Tcb) ->
     if Tcb#tcb.send_fin == 2 andalso Tcb#tcb.snd_una == Tcb#tcb.snd_max ->
 	set_state(Tcb, fin_wait_2);
     true -> Tcb
     end;
-newack_action(last_ack, Tcb, _) ->
+newack_action(last_ack, Tcb) ->
     % All data acked, close
     if Tcb#tcb.send_fin == 2 andalso Tcb#tcb.snd_una == Tcb#tcb.snd_max ->
         set_state(Tcb, closed);
     true -> Tcb
     end;
-newack_action(syn_rcvd, Tcb, _) -> set_state(Tcb, established);
-newack_action(_, Tcb, _) -> Tcb.
+newack_action(syn_rcvd, Tcb) -> set_state(Tcb, established);
+newack_action(_, Tcb) -> Tcb.
 
-data_action(established, Tcb, Data) -> ok;
-data_action(fin_wait_1, Tcb, Data) -> ok;
-data_action(fin_wait_2, Tcb, Data) -> ok;
-data_action(syn_rcvd, Tcb, Data) -> ok;
-data_action(_, _, _) -> none.
+data_action(established) -> ok;
+data_action(fin_wait_1) -> ok;
+data_action(fin_wait_2) -> ok;
+data_action(syn_rcvd) -> ok;
+data_action(_) -> none.
 
 %out_order_action(established, Tcb, Data) ->
 %    set_tcbdata(Tcb, out_order, Data),
@@ -799,9 +795,9 @@ send_packet_1(Tcb, Pkt) ->
 %    Seq_Len = size(Pkt#pkt.data)+Pkt#pkt.is_syn+Pkt#pkt.is_fin,
 %    prepare_retransmit(Tcb, Pkt#pkt.seq, Seq_Len, Pkt).
 
-prepare_retransmit(Tcb, Snd_Nxt, Seq_Len, Packet) when Seq_Len > 0 ->
-    set_rqueue(Tcb, {seq:add(Snd_Nxt, Seq_Len), Packet});
-prepare_retransmit(Tcb, _, _, _) -> Tcb.
+%prepare_retransmit(Tcb, Snd_Nxt, Seq_Len, Packet) when Seq_Len > 0 ->
+%    set_rqueue(Tcb, {seq:add(Snd_Nxt, Seq_Len), Packet});
+%prepare_retransmit(Tcb, _, _, _) -> Tcb.
 
 build_options(Options) ->
     OptBin = lists:filtermap(fun build_option/1, Options),
@@ -844,11 +840,6 @@ build_bin_packet(Tcb, Pkt) ->
     OptBin = build_options(Options),
     add_checksum(SPkt#pkt.sip, SPkt#pkt.dip, Pre_Chk, Post_Chk,
 		 OptBin, SPkt#pkt.data, SPkt#pkt.data_size).
-
-build_bin_packet(Pkt) ->
-    {Pre_Chk, Post_Chk} = build_bin_packet_1(Pkt),
-    add_checksum(Pkt#pkt.sip, Pkt#pkt.dip, Pre_Chk, Post_Chk,
-		 <<>>, Pkt#pkt.data, Pkt#pkt.data_size).
 
 build_bin_packet_1(Pkt) ->
     {<<(Pkt#pkt.sport):16/big-integer,
@@ -902,14 +893,14 @@ build_packet(Tcb, Type) ->
 
 %% Retransmissions
 
-retransmit(Tcb, Packet, Smss) when Packet#pkt.data_size =< Smss ->
-    {Bin_Packet, Len} = build_bin_packet(Tcb, Packet),
-    ip:send(Bin_Packet, Len, tcp, Packet#pkt.dip);
-retransmit(Tcb,Packet, Smss) ->
-    <<Data:Smss/binary, Rem/binary>> = Packet#pkt.data,
-    Send_Packet= Packet#pkt{data = Data, data_size = Smss},
-    
-    {Bin_Packet, Len} = build_bin_packet(Tcb, Send_Packet),
-    ip:send(Bin_Packet, Len, tcp, Send_Packet#pkt.dip),
-    retransmit(Tcb, Packet#pkt{seq = seq:add(Packet#pkt.seq,Smss), 
-			       data = Rem, data_size = size(Rem)}, Smss).   
+%retransmit(Tcb, Packet, Smss) when Packet#pkt.data_size =< Smss ->
+%    {Bin_Packet, Len} = build_bin_packet(Tcb, Packet),
+%    ip:send(Bin_Packet, Len, tcp, Packet#pkt.dip);
+%retransmit(Tcb,Packet, Smss) ->
+%    <<Data:Smss/binary, Rem/binary>> = Packet#pkt.data,
+%    Send_Packet= Packet#pkt{data = Data, data_size = Smss},
+%
+%    {Bin_Packet, Len} = build_bin_packet(Tcb, Send_Packet),
+%    ip:send(Bin_Packet, Len, tcp, Send_Packet#pkt.dip),
+%    retransmit(Tcb, Packet#pkt{seq = seq:add(Packet#pkt.seq,Smss),
+%			       data = Rem, data_size = size(Rem)}, Smss).
