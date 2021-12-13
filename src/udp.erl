@@ -26,8 +26,8 @@
 
 -import(checksum,[checksum/1]).
 -import(packet_check,[check_packet/4, compute_checksum/5]).
--export([start_link/0, init/1, recv/3, send/5, open/1, open/3]).
--export([handle_call/3, handle_cast/2, handle_info/2]).
+-export([start_link/0, init/1, recv/3, send/5, open/1, open/2, open/3]).
+-export([handle_call/3, handle_cast/2, handle_info/2, new_ip/1]).
 -behavior(gen_server).
 -include("ip.hrl").
 %%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -38,8 +38,11 @@ recv(Src_Ip, Dst_Ip, Data) ->
     gen_server:cast(?MODULE, {recv, Src_Ip, Dst_Ip, Data}).
 
 open(Lc_Port) -> gen_server:call(?MODULE, {open, Lc_Port, self()}, infinity).
+open(Lc_Addr, Lc_Port) -> gen_server:call(?MODULE, {add, local, {Lc_Addr, Lc_Port}, self()}, infinity).
 open(Lc_Port, Dst_Ip, Dst_Port) -> %% This will send incoming packets to Lc_Port from Dst_Ip, Dst_Port to the calling process as {udp, {Lc_Ip, Lc_Port, Dst_Ip, Dst_Port}, Data}
     gen_server:call(?MODULE, {open, Lc_Port, Dst_Ip, Dst_Port, self()}, infinity).
+
+
 
 send(Src_Ip, SPort, Dst_Ip, DPort, Data) ->
     Len = size(Data) + 8,
@@ -55,17 +58,36 @@ send(Src_Ip, SPort, Dst_Ip, DPort, Data) ->
 		      Data/binary>>,
     ip:send(Checksum_Packet, size(Checksum_Packet), udp, Src_Ip, Dst_Ip).
 
+new_ip(Ip) -> gen_server:call(?MODULE, {new_ip, Ip}, infinity).
+
+
 %%%%%%%%%%%%%% Reader Loop %%%%%%%%%%%%%%
 
 init([]) ->
     Table = ets:new(?MODULE, []),
-    {ok, Table}.
+    {ok, {Table, 0}}.
 
-handle_call({open, Lc_Port, Pid}, _From, Table) ->
-    {reply, open_impl(Table, Lc_Port, Pid), Table};
+handle_call({new_ip, NewIp}, _From, {Table, _Ip}) -> {reply, ok, {Table, NewIp}};
+handle_call({open, Lc_Port, Pid}, From, S) -> handle_call({add, local, {0, Lc_Port}, Pid}, From, S);
 
-handle_call({open, Lc_Port, Dst_Ip, Dst_Port, Pid}, _From, Table) ->
-    {reply, open_impl(Table, {Lc_Port, Dst_Ip, Dst_Port}, Pid), Table}.
+handle_call({add, local, {0, Lc_Port}, Conn}, From, {_, Lc_Addr} = S) when Lc_Addr /= 0 -> handle_call({add, local, {Lc_Addr, Lc_Port}, Conn}, From, S);
+handle_call({add, local, {Lc_Addr, 0}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 0, 65535}, Conn}, From, S);
+handle_call({add, local, {Lc_Addr, Lc_Port}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, Lc_Port, 1}, Conn}, From, S);
+handle_call({add, local, {Lc_Addr, 0, Tries}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 1, Tries}, Conn}, From, S);
+handle_call({add, local, {Lc_Addr, Lc_Port, 0}, Conn}, _From, S) -> {reply, {error, eaddrinuse}, S};
+
+handle_call({add, local, {Lc_Addr, Lc_Port, Tries}, Conn}, From, {Table, _} = S) ->
+    Key = {Lc_Addr, Lc_Port},
+    case ets:insert_new(Table, {Key, Conn}) of
+	true ->
+	    Ref = monitor(process, Conn),
+	    true = ets:insert_new(Table, {Ref, Key}),
+	    {reply, {ok, Lc_Addr, Lc_Port}, S};
+	false -> handle_call({add, local, {Lc_Addr, Lc_Port + 1, Tries - 1}, Conn}, From, S)
+    end;
+
+handle_call({open, Lc_Port, Dst_Ip, Dst_Port, Pid}, _From, {Table, _} = S) ->
+    {reply, open_impl(Table, {Lc_Port, Dst_Ip, Dst_Port}, Pid), S}.
 
 open_impl(Table, Key, Pid) ->
     Ref = monitor(process, Pid),
@@ -78,28 +100,31 @@ open_impl(Table, Key, Pid) ->
             {error, addrinuse}
     end.
 
-handle_cast({recv, Src_Ip, Loc_Ip, Packet}, Table) ->
+handle_cast({recv, Src_Ip, Loc_Ip, Packet}, {Table, _} = S) ->
     case catch decode(Src_Ip, Loc_Ip, Packet) of
 	{ok, Src_Ip, Loc_Ip, Src_Port, Loc_Port, Data} ->
 	    case ets:lookup(Table, {Loc_Port, Src_Ip, Src_Port}) of
 	        [{_Key, Pid}] -> Pid ! {udp, {Loc_Ip, Loc_Port, Src_Ip, Src_Port}, Data};
-	        [] -> case ets:lookup(Table, Loc_Port) of
+	        [] -> case ets:lookup(Table, {Loc_Ip, Loc_Port}) of
 	            [{_Key, Pid}] -> Pid ! {udp, {Loc_Ip, Loc_Port, Src_Ip, Src_Port}, Data};
-	            [] -> ok
+	            [] -> case ets:lookup(Table, {0, Loc_Port}) of
+	                [{_Key, Pid}] -> Pid ! {udp, {Loc_Ip, Loc_Port, Src_Ip, Src_Port}, Data};
+	                [] -> ok
+	            end
 	        end
 	    end;
 	{error, Error} -> ok
      end,
-     {noreply, Table}.
+     {noreply, S}.
 
-handle_info({'DOWN', Ref, _Type, _Pid, _Info}, Table) ->
+handle_info({'DOWN', Ref, _Type, _Pid, _Info}, {Table, _} = S) ->
     case ets:lookup(Table, Ref) of
         [{Ref, Key}] ->
             true = ets:delete(Table, Ref),
             true = ets:delete(Table, Key);
         [] -> ok
     end,
-    {noreply, Table}.
+    {noreply, S}.
 
 %%%%%%%%%%%%%% Reader Help Functions %%%%%%%%%%%%%%%%%%
 

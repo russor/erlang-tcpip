@@ -24,7 +24,7 @@
 
 -module(etcpip_socket).
 
--export([start/0, start/2, start_ip/1, open/2, open/3, open/4, listen/1, accept/1, accept/2, recv/4, send/4,
+-export([start/0, start/2, start_ip/1, open/2, open/4, listen/1, accept/1, accept/2, recv/4, send/4, sendto/5, recvfrom/4,
 	 close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, getopt/2, map_ip/1, unmap_ip/1, listen/2, sockname/1, peername/1, info/1, cancel/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -37,10 +37,8 @@ start(PhyModule, L2Module) ->
 start_ip(L2Module) ->
     init(false, unknown, L2Module).
 
-open(tcp, Options) -> tcb:start(new, Options).
-
-open(tcp, Dst_Ip, Dst_Port) ->
-    tcp_con:usr_open(Dst_Ip, Dst_Port).
+open(tcp, Options) -> tcb:start(new, Options);
+open(udp, Options) -> ucb:start(new, Options).
 
 open(udp, Lc_Port, Dst_Ip, Dst_Port) -> %% Udp
     udp:usr_open(Lc_Port, Dst_Ip, Dst_Port).
@@ -52,7 +50,10 @@ accept(ListenConn, Timeout) -> gen_server:call(ListenConn, {accept, Timeout}, in
 
 recv(Conn, Bytes, Flags, Timeout) -> gen_server:call(Conn, {recv, Bytes, Flags, Timeout}, infinity).
 
+recvfrom(Conn, Bytes, Flags, Timeout) -> gen_server:call(Conn, {recvfrom, Bytes, Flags, Timeout}, infinity).
+
 send(Conn, Data, Flags, Timeout) -> gen_server:call(Conn, {queue, Data, Flags, Timeout}, infinity).
+sendto(Conn, Data, Dest, Flags, Timeout) -> gen_server:call(Conn, {queue, Data, Dest, Flags, Timeout}, infinity).
 
 close(Conn) -> gen_server:call(Conn, close, infinity).
 
@@ -106,7 +107,8 @@ init(Full, _PhyModule, L2Module) ->
 new_ip(Ip, NetMask, GateWay) ->
     arp:new_ip(Ip),
     ip:new_ip(Ip, NetMask, GateWay),
-    tcp_pool:new_ip(Ip).
+    tcp_pool:new_ip(Ip),
+    udp:new_ip(Ip).
 
 %% Stack is IPv4 only...
 map_ip(any) -> 0;
