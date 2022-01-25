@@ -74,7 +74,7 @@ handle_call({add, local, {0, Lc_Port}, Conn}, From, {_, Lc_Addr} = S) when Lc_Ad
 handle_call({add, local, {Lc_Addr, 0}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 0, 65535}, Conn}, From, S);
 handle_call({add, local, {Lc_Addr, Lc_Port}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, Lc_Port, 1}, Conn}, From, S);
 handle_call({add, local, {Lc_Addr, 0, Tries}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 1, Tries}, Conn}, From, S);
-handle_call({add, local, {Lc_Addr, Lc_Port, 0}, Conn}, _From, S) -> {reply, {error, eaddrinuse}, S};
+handle_call({add, local, {_Lc_Addr, _Lc_Port, 0}, _Conn}, _From, S) -> {reply, {error, eaddrinuse}, S};
 
 handle_call({add, local, {Lc_Addr, Lc_Port, Tries}, Conn}, From, {Table, _} = S) ->
     Key = {Lc_Addr, Lc_Port},
@@ -113,7 +113,7 @@ handle_cast({recv, Src_Ip, Loc_Ip, Packet}, {Table, _} = S) ->
 	            end
 	        end
 	    end;
-	{error, Error} -> ok
+	{error, _Error} -> ok
      end,
      {noreply, S}.
 
