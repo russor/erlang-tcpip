@@ -26,9 +26,6 @@
 
 -export([start/3, start/2, init/2, init/3]).
 -export([handle_info/2, handle_cast/2, handle_call/3]).
--export([set_snd_wnd/2, set_snd_una/2, 
-         set_rqueue/2, set_state/2,
-         get_rqueue/1]).
 
 -include("tcb.hrl").
 -include("tcp_packet.hrl").
@@ -128,19 +125,16 @@ handle_call({recv, Length, Flags, Timeout}, From = {To, _Tag}, Tcb)
 	       (Tcb#tcb.rbsize >= Length andalso Length > 0) orelse
 	       Tcb#tcb.state == close_wait orelse
 	       Tcb#tcb.state == time_wait ->
-	    %io:format("got data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             Size = min(Length, Tcb#tcb.rbsize),
             {Data, Rem} = get_data(Tcb#tcb.rbuf, Size, <<>>),
             gen_server:reply(From, {ok, Data}),
 
-
-            New_Size = Tcb#tcb.rbsize - Size,
+            New_Size = Tcb#tcb.rbsize - size(Data),
             Free_Buf = max(Tcb#tcb.maxrbsize-New_Size, 0),
             Rcv_Wnd = min(?TCP_MAX_WINDOW, Free_Buf),
 
             send_packet(Tcb#tcb{rbuf=Rem, rbsize=New_Size, rcv_wnd = Rcv_Wnd, obs = {}});
         _ when Timeout == nowait ->
-	    %io:format("selecting data len ~B rbsize ~B~n", [Length, Tcb#tcb.rbsize]),
             Handle = make_ref(),
             gen_server:reply(From, {select, {select_info, recv, Handle}}),
             send_packet(Tcb#tcb{obs = {To, Length, Handle}});
@@ -204,6 +198,20 @@ handle_call({accept, Timeout}, From, Tcb) ->
 		{noreply, Tcb#tcb{obs=queue:cons(From, Tcb#tcb.obs)}};
 	{{value, Socket}, Q2} ->
 		{reply, {ok, Socket}, Tcb#tcb{open_queue = Q2}}
+    end;
+
+handle_call({connect, DestAddr, _Timeout}, From, Tcb) when Tcb#tcb.state == new ->
+    Rt_Ip = etcpip_socket:map_ip(maps:get(addr, DestAddr)),
+    Rt_Port = maps:get(port, DestAddr),
+    case tcp_pool:add({connect, {Tcb#tcb.lc_ip, Tcb#tcb.lc_port, Rt_Ip, Rt_Port}}, self()) of
+        {ok, Lc_Ip, Lc_Port} ->
+            send_packet(Tcb#tcb{ rt_ip = Rt_Ip, rt_port = Rt_Port,
+                                 lc_ip = Lc_Ip, lc_port = Lc_Port,
+                                 state = syn_sent,
+                                 snd_max = seq:add(Tcb#tcb.iss, 1),
+                                 send_type = ack, obs = From
+            });
+        O -> {reply, O, Tcb}
     end;
 
 handle_call(sockname, _From, Tcb) ->
@@ -379,8 +387,12 @@ set_rqueue(Tcb, Data) ->
     Q = queue:cons(Data, Tcb#tcb.rqueue),
     Tcb#tcb{rqueue= Q, rtimer = Timer}.
 
-set_state(Tcb = #tcb{obs = Listener}, established) when Listener /= {}->
+set_state(Tcb = #tcb{obs = Listener}, established) when is_pid(Listener) ->
     Listener ! {state, established, self()},
+    Tcb#tcb{state = established, obs = {}};
+
+set_state(Tcb = #tcb{obs = From}, established) ->
+    gen_server:reply(From, ok),
     Tcb#tcb{state = established, obs = {}};
 
 % TODO: cancel readers when transitioning to CLOSING
@@ -560,19 +572,20 @@ in(listen, Tcb, Pkt) ->
     
 in(syn_sent, Tcb, Pkt) ->
     case {Pkt#pkt.is_ack, Pkt#pkt.is_syn, Pkt#pkt.is_fin} of
-        {1, 1, 0} when Pkt#pkt.ack == Tcb#tcb.snd_una ->
+        {1, 1, 0} when Pkt#pkt.ack == Tcb#tcb.snd_max ->
 	    Tcb1 = case Pkt#pkt.mss of
 		-1 -> Tcb#tcb{rcv_nxt = seq:add(Pkt#pkt.seq, 1), irs = Pkt#pkt.seq};
 		Smss -> Tcb#tcb{rcv_nxt = seq:add(Pkt#pkt.seq, 1), irs = Pkt#pkt.seq, smss = Smss, cwnd = 2*Smss} % TODO: initial congestion window?
 	    end,
 	    Tcb2 = set_snd_wnd(Tcb1, {Pkt#pkt.window, Pkt#pkt.seq, Pkt#pkt.ack}),
-	    set_state(Tcb2#tcb{send_type = any}, established);
+	    {ok, newack, Tcb3} = check_ack(Tcb2, Pkt),
+	    set_state(Tcb3#tcb{send_type = any}, established);
 	{0, 1, 0} -> % simultaneous syn
 	    Tcb1 = case Pkt#pkt.mss of
 		-1 -> Tcb#tcb{rcv_nxt = seq:add(Pkt#pkt.seq, 1), irs = Pkt#pkt.seq};
 		Smss -> Tcb#tcb{rcv_nxt = seq:add(Pkt#pkt.seq, 1), irs = Pkt#pkt.seq, smss = Smss, cwnd = 2*Smss} % TODO: initial congestion window?
 	    end,
-	    set_state(Tcb1#tcb{send_type = ack}, syn_received);
+	    set_state(Tcb1#tcb{send_type = ack}, syn_rcvd);
 	_ -> Tcb % TODO send RST probably
     end;
 

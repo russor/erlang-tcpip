@@ -59,42 +59,33 @@ handle_call({new_ip, NewIp}, _From, {Table, _Ip}) -> {reply, ok, {Table, NewIp}}
 
 handle_call({get, Socket}, _From, {Table, _} = S) ->
     case lookup(Table, Socket) of
-	[] -> {reply, {error, no_connection}, S};
-	[{_, Conn}] -> {reply, {ok, Conn}, S}
+        [] -> {reply, {error, no_connection}, S};
+        [{_, Conn}] -> {reply, {ok, Conn}, S}
     end;
-
-handle_call({add, remote, R_Socket, Conn}, _From, {Table, Ip} = S) ->
-    {Rt_Ip, Rt_Port} = R_Socket,
-    Lc_Port = find_free_port(Table, Ip, Rt_Ip, Rt_Port),
-    ets:insert(Table, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
-    {reply, {ok, Ip, Lc_Port}, S};
 
 handle_call({add, local, {Lc_Addr, 0}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 0, 65535}, Conn}, From, S);
 handle_call({add, local, {Lc_Addr, Lc_Port}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, Lc_Port, 1}, Conn}, From, S);
 handle_call({add, local, {Lc_Addr, 0, Tries}, Conn}, From, S) -> handle_call({add, local, {Lc_Addr, 1, Tries}, Conn}, From, S);
-handle_call({add, local, {Lc_Addr, Lc_Port, 0}, Conn}, _From, S) -> {reply, {error, eaddrinuse}, S};
+handle_call({add, local, {_Lc_Addr, _Lc_Port, 0}, _Conn}, _From, S) -> {reply, {error, eaddrinuse}, S};
 
 handle_call({add, local, {Lc_Addr, Lc_Port, Tries}, Conn}, From, {Table, _} = S) ->
     case ets:insert_new(Table, {{Lc_Addr, Lc_Port}, Conn}) of
-	true -> {reply, {ok, Lc_Addr, Lc_Port}, S};
-	false -> handle_call({add, local, {Lc_Addr, Lc_Port + 1, Tries - 1}, Conn}, From, S)
+        true -> {reply, {ok, Lc_Addr, Lc_Port}, S};
+        false -> handle_call({add, local, {Lc_Addr, (Lc_Port + 1) band 16#FFFF, Tries - 1}, Conn}, From, S)
     end;
 
-handle_call({add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}, _From, {Table, _} = S) ->
-    ets:insert(Table, {{Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}),
-    {reply, {ok, Ip, Lc_Port}, S};
+handle_call({add, connect, {0, Lc_Port, Rt_Ip, Rt_Port}, Conn}, From, {_Table, Ip} = S) -> handle_call({add, connect, {Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}, From, S);
+handle_call({add, connect, {Lc_Ip, 0, Rt_Ip, Rt_Port}, Conn}, From, S) -> handle_call({add, connect, {Lc_Ip, 0, Rt_Ip, Rt_Port, 65535}, Conn}, From, S);
+handle_call({add, connect, {Lc_Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}, From, S) -> handle_call({add, connect, {Lc_Ip, Lc_Port, Rt_Ip, Rt_Port, 1}, Conn}, From, S);
+handle_call({add, connect, {Lc_Ip, 0, Rt_Ip, Rt_Port, Tries}, Conn}, From, S) -> handle_call({add, connect, {Lc_Ip, 1, Rt_Ip, Rt_Port, Tries}, Conn}, From, S);
+handle_call({add, connect, {_Lc_Ip, _Lc_Port, _Rt_Ip, _Rt_Port, 0}, _Conn}, _From, S) -> {reply, {error, eaddrinuse}, S};
+
+handle_call({add, connect, {Lc_Ip, Lc_Port, Rt_Ip, Rt_Port, Tries}, Conn}, From, {Table, _} = S) ->
+    case ets:insert_new(Table, {{Lc_Ip, Lc_Port, Rt_Ip, Rt_Port}, Conn}) of
+        true -> {reply, {ok, Lc_Ip, Lc_Port}, S};
+        false -> handle_call({add, connect, {Lc_Ip, (Lc_Port + 1) band 16#FFFF, Rt_Ip, Rt_Port, Tries - 1}, Conn}, From, S)
+    end;
 
 handle_call({remove, Socket}, _From, {Table, _} = S) ->
     ets:delete(Table, Socket),
     {reply, ok, S}.
-
-find_free_port(Table, Lc_Ip, Rt_Ip, Rt_Port) ->
-    find_free_port_1(Table, Lc_Ip, Rt_Ip, Rt_Port, 1000).
-
-find_free_port_1(Table, Lc_Ip, Rt_Ip, Rt_Port, N) ->
-    case ets:member(Table, {Lc_Ip, N, Rt_Ip, Rt_Port}) of
-	true ->
-	    find_free_port_1(Table, Lc_Ip, Rt_Ip, Rt_Port, N+1);
-	false ->
-	    N
-    end.

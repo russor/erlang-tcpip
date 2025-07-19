@@ -36,8 +36,6 @@
 
 
 -record(tcb, {
-	  client,                       % client process
-
 	  lc_port   = 0,               % local port number
 	  rt_port   = 0,               % remote port number
 	  lc_ip     = 0,               % local ip
@@ -51,7 +49,7 @@
 	  rbsize    = 0,                % size of receive buffer
 	  rbuf      = queue:new(),      % received data buffer
 
-	  cwnd      = -1,               % congestion window size
+	  cwnd      = 2 * ?DEFAULT_SMSS,% congestion window size
 	  ssthr     = ?DEFAULT_SSTHR,   % slow start threshold
 	  smss      = ?DEFAULT_SMSS,    % send maximum segment size
 	  rmss      = ?DEFAULT_RMSS,    % receive maximum segment size

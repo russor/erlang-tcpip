@@ -24,7 +24,7 @@
 
 -module(etcpip_socket).
 
--export([start/0, start/2, start_ip/1, open/2, open/4, listen/1, accept/1, accept/2, recv/4, send/4, sendto/5, recvfrom/4,
+-export([start/0, start/2, start_ip/1, open/2, open/4, listen/1, accept/1, accept/2, connect/3, recv/4, send/4, sendto/5, recvfrom/4,
 	 close/1, bind/2, string_to_ip/1, new_ip/3, setopt/3, getopt/2, map_ip/1, unmap_ip/1, listen/2, sockname/1, peername/1, info/1, cancel/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%% USER API %%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -47,6 +47,8 @@ listen(Src_Port) -> tcb:start(listen, Src_Port).
 
 accept(ListenConn) -> accept(ListenConn, infinity).
 accept(ListenConn, Timeout) -> gen_server:call(ListenConn, {accept, Timeout}, infinity).
+
+connect(Conn, Addr, Timeout) -> gen_server:call(Conn, {connect, Addr, Timeout}, infinity).
 
 recv(Conn, Bytes, Flags, Timeout) -> gen_server:call(Conn, {recv, Bytes, Flags, Timeout}, infinity).
 
