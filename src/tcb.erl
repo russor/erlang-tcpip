@@ -646,7 +646,14 @@ process_window(Tcb, Pkt) ->
     set_snd_wnd(Tcb, {Pkt#pkt.window, Pkt#pkt.seq, Pkt#pkt.ack}).
 
 process_data(Tcb, Pkt, State, <<>>) ->
-    process_fin(Tcb, Pkt#pkt.is_fin, State, no_ack, 0);
+    case seq:lt(Tcb#tcb.rcv_nxt, Pkt#pkt.seq) of
+        true -> % Out of order fin
+            io:format("dropping out of order fin with empty data ~B (expect ~B)~n", [Pkt#pkt.seq, Tcb#tcb.rcv_nxt]),
+            Tcb;
+        false ->
+	    process_fin(Tcb, Pkt#pkt.is_fin, State, no_ack, 0)
+    end;
+
 process_data(Tcb, Pkt, State, Data) ->
     case seq:lt(Tcb#tcb.rcv_nxt, Pkt#pkt.seq) of
         true ->  % Out of order data
