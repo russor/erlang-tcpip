@@ -645,22 +645,11 @@ process_ack(Tcb, Pkt, State, Data) ->
 process_window(Tcb, Pkt) ->
     set_snd_wnd(Tcb, {Pkt#pkt.window, Pkt#pkt.seq, Pkt#pkt.ack}).
 
-process_data(Tcb, Pkt, State, <<>>) ->
-    case seq:lt(Tcb#tcb.rcv_nxt, Pkt#pkt.seq) of
-        true -> % Out of order fin
-            io:format("dropping out of order fin with empty data ~B (expect ~B)~n", [Pkt#pkt.seq, Tcb#tcb.rcv_nxt]),
-            Tcb;
-        false ->
-	    process_fin(Tcb, Pkt#pkt.is_fin, State, no_ack, 0)
-    end;
-
 process_data(Tcb, Pkt, State, Data) ->
     case seq:lt(Tcb#tcb.rcv_nxt, Pkt#pkt.seq) of
         true ->  % Out of order data
-            _Out_Order_Data = {Pkt#pkt.seq, Pkt#pkt.is_fin, Data},
-            io:format("dropping out of order segment ~B (expect ~B)~n", [Pkt#pkt.seq, Tcb#tcb.rcv_nxt]),
-            Tcb;
-            %tcb:out_order_action(State, Tcb, Out_Order_Data);
+            NewOut = out_order:merge_data(Tcb#tcb.out_order, {Pkt#pkt.seq, Pkt#pkt.is_fin, Data}),
+            Tcb#tcb{out_order = NewOut, send_type = any};
         false ->
             case data_action(State) of
                 ok ->
@@ -672,10 +661,8 @@ process_data(Tcb, Pkt, State, Data) ->
 
 check_out_order(Tcb, State, Data_Size, Pkt) ->
     case out_order:get_out_order(Tcb#tcb.out_order, Tcb#tcb.rcv_nxt) of
-	{_, Is_Fin, Data} ->
-	    State = Tcb#tcb.state,
-	    process_fin(Tcb, Is_Fin, State,
-			ack, size(Data));
+	{{Lseq, Is_Fin, Data}, T} ->
+	    process_data(Tcb#tcb{out_order = T}, #pkt{seq = Lseq, is_fin = Is_Fin }, State, Data);
 	_ ->
 	    process_fin(Tcb, Pkt#pkt.is_fin, State,
 			del_ack, Data_Size)
@@ -768,20 +755,6 @@ data_action(fin_wait_1) -> ok;
 data_action(fin_wait_2) -> ok;
 data_action(syn_rcvd) -> ok;
 data_action(_) -> none.
-
-%out_order_action(established, Tcb, Data) ->
-%    set_tcbdata(Tcb, out_order, Data),
-%    send_packet(Tcb, ack); % For fast retransmit
-%out_order_action(fin_wait_1, Tcb, Data) ->
-%    set_tcbdata(Tcb, out_order, Data),
-%    send_packet(Tcb, ack); % For fast retransmit
-%out_order_action(fin_wait_2, Tcb, Data) ->
-%    set_tcbdata(Tcb, out_order, Data),
-%    send_packet(Tcb, ack); % For fast retransmit
-%out_order_action(syn_rcvd, Tcb, Data) ->
-%    set_tcbdata(Tcb, out_order, Data),
-%    send_packet(Tcb, ack); % For fast retransmit
-%out_order_action(_, Tcb, _) -> Tcb.
 
 fin_action(established, Tcb) ->
     set_rdata(set_state(Tcb#tcb{rcv_nxt = seq:add(Tcb#tcb.rcv_nxt, 1), send_type = any}, close_wait), <<>>);
