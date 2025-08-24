@@ -36,6 +36,7 @@
 
 
 -record(tcb, {
+	  owner,                       % Process that owns this socket
 	  lc_port   = 0,               % local port number
 	  rt_port   = 0,               % remote port number
 	  lc_ip     = 0,               % local ip

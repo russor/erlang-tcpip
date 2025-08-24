@@ -25,7 +25,7 @@
 -module(tcb).
 
 -export([start/3, start/2, init/2, init/3]).
--export([handle_info/2, handle_cast/2, handle_call/3]).
+-export([handle_info/2, handle_cast/2, handle_call/3, terminate/2]).
 
 -include("tcb.hrl").
 -include("tcp_packet.hrl").
@@ -33,12 +33,12 @@
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-start(listen, Port) -> proc_lib:spawn_link(?MODULE, init, [listen, Port]);
+start(listen, Port) -> proc_lib:spawn(?MODULE, init, [listen, self(), Port]);
 
-start(new, Options) -> proc_lib:spawn_link(?MODULE, init, [new, Options]).
+start(new, Options) -> proc_lib:spawn(?MODULE, init, [new, self(), Options]).
 
 start(new, Rt_Ip, Rt_Port) ->
-    proc_lib:spawn_link(?MODULE, init, [new, Rt_Ip, Rt_Port]).
+    proc_lib:spawn(?MODULE, init, [new, self(), Rt_Ip, Rt_Port]).
 
 clone(Tcb, Socket, Irs, Mss) ->
     Rcv_Next = seq:add(Irs, 1),
@@ -63,32 +63,44 @@ clone(Tcb, Socket, Irs, Mss) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-init(listen, Lc_Port) ->
+init(listen, Owner, Lc_Port) ->
     process_flag(trap_exit, true),
+    monitor(process, Owner),
     Tcb = init_tcb(0, 0, listen),
     {ok, Lc_Ip, Lc_Port} = tcp_pool:add({local, {0, Lc_Port}}, self()),
     Tcb1 = Tcb#tcb{lc_ip = Lc_Ip, lc_port = Lc_Port},
-    gen_server:enter_loop(?MODULE, [], Tcb1);
+    gen_server:enter_loop(?MODULE, [], Tcb1#tcb{owner = Owner});
 
-init(new, Options) ->
+init(new, Owner, Options) ->
     process_flag(trap_exit, true),
+    monitor(process, Owner),
     Options = #{},
     Tcb = init_tcb(0, 0, new),
-    gen_server:enter_loop(?MODULE, [], Tcb);
+    gen_server:enter_loop(?MODULE, [], Tcb#tcb{owner = Owner}).
 
 % from clone in listen, need to send synack
-init(Tcb, _Parent) ->
+init(Tcb, _Parent) when is_record(Tcb, tcb) ->
     process_flag(trap_exit, true),
+    monitor(process, Tcb#tcb.owner),
     {noreply, Tcb1} = send_packet(Tcb),
     gen_server:enter_loop(?MODULE, [], Tcb1).
 
-init(new, Rt_Ip, Rt_Port) ->
+init(new, Owner, Rt_Ip, Rt_Port) ->
     process_flag(trap_exit, true),
+    monitor(process, Owner),
     Tcb = init_tcb(Rt_Ip, Rt_Port, new),
-    gen_server:enter_loop(?MODULE, [], Tcb).
+    gen_server:enter_loop(?MODULE, [], Tcb#tcb{owner = Owner}).
 
 handle_info({state, established, Socket}, Tcb) ->
     send_packet(set_open_queue(Tcb, Socket));
+
+handle_info({'DOWN', _Ref, process, Pid, Reason}, Tcb) ->
+    if Pid == Tcb#tcb.owner ->
+        io:format("owner shutdown ~p: ~p~n", [Tcb#tcb.state, Reason]);
+    true ->
+        io:format("non-owner shutdown: ~p, pid: ~p, owner: ~p~n", [Reason, Pid, Tcb#tcb.owner])
+    end,
+    {noreply, Tcb};
 
 % delayed ack trigger
 handle_info({event, ack}, Tcb) ->
@@ -251,8 +263,15 @@ handle_call({getopt, {otp, meta}}, _From, Tcb) ->
 handle_cast({in, Pkt}, Tcb) ->
     send_packet(in(Tcb#tcb.state, Tcb, Pkt)).
 
-send_packet(Tcb = #tcb{state = closed}) ->
+terminate(Reason, Tcb) ->
+    % TODO: notify listeners!
     % TODO: remove from tcp_pool
+    if Tcb#tcb.state == closed -> ok;
+    true ->
+        io:format("tcb ~p terminated ~p~n", [Tcb#tcb.state, Reason])
+    end.
+
+send_packet(Tcb = #tcb{state = closed}) ->
     {stop, normal, Tcb};
 send_packet(Tcb = #tcb{send_type = ack}) ->
     send_packet(send_packet_impl(Tcb#tcb{send_type = none}, ack));
@@ -398,6 +417,7 @@ set_state(Tcb = #tcb{obs = From}, established) ->
 % TODO: cancel readers when transitioning to CLOSING
 set_state(Tcb, State) -> Tcb#tcb{state = State}.
 
+set_rdata(Tcb, <<>>) -> Tcb;
 set_rdata(Tcb, Data) ->
     New_Data = queue:cons(Data, Tcb#tcb.rbuf),
     New_Size = Tcb#tcb.rbsize + size(Data),
